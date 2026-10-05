@@ -720,22 +720,24 @@ function step(dt) {
   const area = simW * simH / (1280 * 800);
 
   // rain landing on the pane, with a small splash of satellite droplets
-  let lambda = P.rain * P.rain * 1.8 * area * dt;
+  // above 80% the rain thickens into a downpour: up to 2.5x as many drops at 100%
+  let lambda = P.rain * P.rain * 1.8 * (1 + 1.5 * Math.max(0, (SL.rain - 0.8) / 0.2) ** 1.5) * area * dt;
   while (lambda > 0) {
     if (rand() < Math.min(1, lambda)) {
       const x = rand() * simW, y = rand() * simH * 1.05 - simH * 0.05;
       // heavier rain falls in bigger drops: light rain is mostly fine drops, a downpour mostly large ones
-      const hv = SL.rain, r = minR + (maxR * (0.4 + 0.6 * hv) - minR) * Math.pow(rand(), 2.6 - 1.6 * hv);
+      // heavier rain falls in bigger drops; from about 70% the biggest are already too heavy to hold and drip at once
+      const hv = SL.rain, r = minR + (maxR * (0.4 + 0.75 * hv) - minR) * Math.pow(rand(), 2.6 - 1.6 * hv);
       if (underHand(x, y, 0)) { lambda -= 1; continue; }
       // The heavier the rain, the harder each drop hits the glass. A hard hit bursts: it lands
       // spread wide and ragged, flings a ring of spray well out from the impact, and the jolt
       // shakes the drops around it, knocking loose any that were close to sliding.
       const size = (r - minR) / (maxR - minR);
-      const hit = Math.min(1, (0.1 + 0.9 * SL.rain ** 1.6) * (0.65 + 0.6 * size) * (0.7 + rand() * 0.6));
+      const hit = Math.min(1, (0.02 + 0.98 * SL.rain ** 4) * (0.65 + 0.6 * size) * (0.7 + rand() * 0.6));   // impacts harden sharply toward 100%
       // A hard hit shatters on impact: in that same instant the drop is a smaller centre and a
       // ring of beads thrown radially out around it, more and further the harder the hit. Nothing
       // grows or pulls back; the pieces are simply there and behave as ordinary drops.
-      const burst = hit > 0.3 && drops.length < MAX * 0.8;
+      const burst = hit > 0.55 && drops.length < MAX * 0.75;
       const keep = burst ? 1 - 0.55 * hit : 1, cr = r * Math.cbrt(keep);
       const d0 = addDrop(x, y, cr, { spread: burst ? 0.04 : 0.3 + rand() * 0.3 });
       if (d0) d0.splat = Math.max(d0.splat || 0, burst ? hit * 0.5 : hit * 0.3);
@@ -779,7 +781,7 @@ function step(dt) {
     d.spread *= Math.pow(0.88, dt);
     if (d.splat) { d.splat *= Math.pow(0.94, dt); if (d.splat < 0.02) d.splat = 0; }
     if (!d.moving && (d.r < minR * 1.4 || d.burstId)) {   // small drops and burst beads evaporate
-      d.r -= (d.spray ? 0.018 : d.r < minR ? 0.006 : d.burstId ? 0.004 : 0.003) * S * dt;   // fine spray dries off quickly
+      d.r -= (d.spray ? 0.02 : d.r < minR ? 0.006 : d.burstId ? 0.008 : 0.003) * S * dt;   // fine spray dries off quickly
       if (d.r < 0.5 * S) { d.dead = true; continue; }
     }
     if (!d.moving) {
@@ -869,7 +871,7 @@ function step(dt) {
       const len = Math.hypot(d.x - px, d.y - py), steps = Math.ceil(len / (d.r * 0.4));
       for (let s = 1; s <= steps; s++) { const t = s / steps; eraseAt(px + (d.x - px) * t, py + (d.y - py) * t, d.r * 0.92); }
       if (d.y - d.r * 2 > simH || d.x < -d.r * 2 || d.x > simW + d.r * 2) d.dead = true;
-      else if (d.r > maxR * 1.4 && d.vy > 1.5 * S && rivulets.length < 30) {
+      else if (d.r > maxR * 2 && d.vy > 2 * S && rivulets.length < 30) {   // only a really big gathering of water opens a channel
         // Enough water in one running drop to keep a channel open: it becomes a stream from here,
         // running until its own water is spent unless more arrives to feed it.
         const vol = (d.r / maxR) ** 3;
@@ -1087,7 +1089,7 @@ function stepRivulets(dt) {
   if (mergeAcc >= 10) { mergeAcc = 0; mergeTouchingStreams(); }
   const { maxR } = radii();
   const heavy = Math.max(0, (SL.rain - 0.7) / 0.3);   // streams only above 70% on the rainfall slider
-  const want = Math.round(heavy * 16 * Math.sqrt(simW * simH / (1280 * 800)));
+  const want = Math.round(heavy ** 1.5 * 16 * Math.sqrt(simW * simH / (1280 * 800)));   // a few at 80%, more at 90%, many at 100%
   if (rivulets.filter((r) => !r.orphan).length < want && rand() < 0.03 * dt) spawnRivulet();
 
   for (let i = rivulets.length - 1; i >= 0; i--) {
@@ -1496,6 +1498,20 @@ function sweep(a, b, a0, a1) {
         smallDrop(x + nx * o + mx * back, y + ny * o + my * back, rr);
       }
     }
+    // A long wipe (past ~40% of the pane's width) gathers more than the fingers can hold against
+    // the glass: every so often a heavy drop breaks off the lowest point of the pushing edge and
+    // runs down from under the fingers.
+    const hr = holdR();
+    if (stroke.dist > simW * 0.4 && stroke.water > hr ** 3 * 0.8 && stroke.dist - stroke.lastDrip > hand.w * (0.6 + rand() * 0.8)) {
+      let low = null;
+      for (const p of frontEdge(ang)) if (!low || p.y > low.y) low = p;
+      if (low) {
+        const rr = hr * (1.05 + rand() * 0.3);
+        const dd = addDrop(x + low.x + low.nx * rr * 1.2, y + low.y + Math.max(0, low.ny) * rr * 1.2 + rr * 0.6, rr, { stick: 1 });
+        if (dd) { dd.moving = true; dd.vy = Math.max(dd.vy, 1.2 * S); dd.trailY = dd.y; dd.gap = dd.r * 2; }
+        stroke.water -= rr ** 3; stroke.lastDrip = stroke.dist;
+      }
+    }
   }
 
   // Changing direction mid-wipe leaves a small, thin puddle lying along the wipe line, mostly on
@@ -1555,7 +1571,7 @@ function release() {
 
 canvas.addEventListener('pointerdown', (e) => {
   lastPt = pt(e); aimHand(lastPt, 0, true); sway = 0;
-  stroke = { mx: 0, my: 0, water: 0, dist: 0, lowP: 0.1, lowT: 0.1, lowTimer: 0, ph: [rand() * 6.283, rand() * 6.283, rand() * 6.283] };
+  stroke = { mx: 0, my: 0, water: 0, dist: 0, lastDrip: 0, lowP: 0.1, lowT: 0.1, lowTimer: 0, ph: [rand() * 6.283, rand() * 6.283, rand() * 6.283] };
   try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   sweep(lastPt, lastPt, handA, handA);
 });
