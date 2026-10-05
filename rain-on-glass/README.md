@@ -10,7 +10,7 @@ A WebGL2 simulation of rain on a window, in one HTML file with no dependencies.
 - **Streams** form above 70% rainfall. They start at the top of the pane, meander down, carry surges of water, merge with each other, absorb drops they touch, and run dry when the rain eases.
 - **Wiping**: drag to wipe as if with three fingers. The fingertips wipe clean while the lower fingers only smear; the fingers tilt with the arm. Pushed water collects in a strip in front of the fingers and breaks into drops when you lift. Holding your fingers still makes water flow around them.
 - **Wipe lines** hold water back: drops spread along the line until they break through, and streams pool at the edge, then fall straight down. The resistance fades as the glass fogs over.
-- **Splashes**: the heavier the rain, the harder drops hit — hard hits land splattered and throw a spray of tiny droplets.
+- **Splashes**: the heavier the rain, the harder drops hit. A hard hit bursts radially into arms that fling droplets off their tips, then pulls back together; the jolt shakes nearby drops and can knock loose ones that were close to sliding.
 - **Sound** (starts on your first click; toggle in the panel): a deep knock for each drop that lands over a wash of rain, both following how heavy the rain is.
 
 ## Controls

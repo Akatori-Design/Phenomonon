@@ -713,17 +713,35 @@ function step(dt) {
       // heavier rain falls in bigger drops: light rain is mostly fine drops, a downpour mostly large ones
       const hv = SL.rain, r = minR + (maxR * (0.4 + 0.6 * hv) - minR) * Math.pow(rand(), 2.6 - 1.6 * hv);
       if (underHand(x, y, 0)) { lambda -= 1; continue; }
-      // The heavier the rain, the harder each drop hits the glass: a hard hit splatters into a
-      // flattened, ragged shape and throws a spray of tiny droplets around it.
+      // The heavier the rain, the harder each drop hits the glass. A hard hit bursts: it lands
+      // spread wide and ragged, flings a ring of spray well out from the impact, and the jolt
+      // shakes the drops around it, knocking loose any that were close to sliding.
       const size = (r - minR) / (maxR - minR);
-      const hit = Math.min(1, SL.rain * SL.rain * (0.7 + 0.5 * size) * (0.6 + rand() * 0.6));
-      const d0 = addDrop(x, y, r, { spread: 0.3 + hit * 0.9 + rand() * 0.3 });
-      if (d0) d0.splat = Math.max(d0.splat || 0, hit);
-      tap(x, size);
-      const n = Math.round(hit * (2 + rand() * 6)) + (rand() < 0.3 ? 1 : 0);
-      for (let i = 0; i < n; i++) {
-        const a = rand() * Math.PI * 2, dist = r * (1.4 + rand() * (1 + 3 * hit));
-        smallDrop(x + Math.cos(a) * dist, y + Math.sin(a) * dist * 0.85, (0.5 + rand() * 0.9) * S * (0.7 + 0.5 * hit));
+      const hit = Math.min(1, (0.1 + 0.9 * SL.rain ** 1.6) * (0.65 + 0.6 * size) * (0.7 + rand() * 0.6));
+      const d0 = addDrop(x, y, r, { spread: 0.3 + hit * 1.2 + rand() * 0.3 });
+      // the burst: arms of water shooting out radially, each flinging a droplet off its tip
+      const arms = hit > 0.25 ? Math.round(5 + 7 * hit + rand() * 3) : 0, a0 = rand() * Math.PI * 2, armList = [];
+      for (let i = 0; i < arms; i++) {
+        const a = a0 + (i + (rand() - 0.5) * 0.6) * (Math.PI * 2 / arms), l = 0.8 + rand() * (1 + 2.5 * hit);
+        armList.push({ a, l, w: 0.22 + rand() * 0.18 });
+        if (drops.length > MAX * 0.7 || rand() < 0.4) continue;   // not every arm throws a droplet
+        const dist = r * (1.3 + l + rand() * 1.5 * hit);
+        const sp = smallDrop(x + Math.cos(a) * dist, y + Math.sin(a) * dist, (0.5 + rand() * (0.5 + 1.1 * hit)) * S);
+        if (sp) sp.spray = true;
+      }
+      if (d0 && d0.x === x && d0.y === y) { d0.splat = hit; d0.arms = armList; }   // only a drop that landed on clear glass
+      else if (d0) d0.splat = Math.max(d0.splat || 0, hit * 0.5);
+      tap(x, size, hit);
+      if (hit > 0.5) {
+        const R = r * (2 + 3 * hit), rSl = minR + (maxR - minR) * 0.42;
+        for (const o of drops) {
+          if (o.dead || o === d0 || o.moving) continue;
+          const dd = Math.hypot(o.x - x, o.y - y);
+          if (dd > R) continue;
+          const jolt = hit * (1 - dd / R);
+          o.spread = Math.max(o.spread, 0.25 * jolt);
+          if (o.r > rSl * 0.8 && rand() < jolt * 0.5) { o.moving = true; o.vy = 0.4 * S; o.trailY = o.y; o.gap = o.r; }
+        }
       }
     }
     lambda -= 1;
@@ -740,7 +758,7 @@ function step(dt) {
     d.spread *= Math.pow(0.88, dt);
     if (d.splat) { d.splat *= Math.pow(0.94, dt); if (d.splat < 0.02) d.splat = 0; }
     if (!d.moving && d.r < minR * 1.4) {
-      d.r -= (d.r < minR ? 0.006 : 0.003) * S * dt;
+      d.r -= (d.spray ? 0.018 : d.r < minR ? 0.006 : 0.003) * S * dt;   // fine spray dries off quickly
       if (d.r < 0.5 * S) { d.dead = true; continue; }
     }
     if (!d.moving) {
@@ -856,7 +874,14 @@ function buildDropQuads() {
       dropQuads.push(d.x, d.y, d.r * sp, d.r * (0.74 - 0.14 * st), d.r * (0.5 + 1.5 * st), ang, 0.03, d.seed);
     } else {
       const g = Math.min(1, d.r / rSlide) * (0.4 + 0.6 * d.sag);   // heavier drops sag more
-      dropQuads.push(d.x, d.y, d.r * sp, d.r * sp * (0.9 - 0.2 * g), d.r * (0.1 + 0.55 * g), d.tilt, d.wob + (d.splat || 0) * 0.35, d.seed);   // a fresh splat is ragged
+      dropQuads.push(d.x, d.y, d.r * sp, d.r * sp * (0.9 - 0.2 * g), d.r * (0.1 + 0.55 * g), d.tilt, d.wob + (d.splat || 0) * 0.55, d.seed);   // a fresh splat is ragged
+      if (d.splat > 0.04 && d.arms) {
+        // arms of the burst, drawn back into the drop by surface tension as the splat settles
+        for (const arm of d.arms) {
+          const len = d.r * arm.l * d.splat * 1.6, w = d.r * arm.w * (0.5 + 0.5 * d.splat);
+          dropQuads.push(d.x, d.y, w, w * 0.55, len, Math.atan2(Math.cos(arm.a), -Math.sin(arm.a)), 0.15, arm.a * 3);
+        }
+      } else if (d.arms) d.arms = null;
     }
   }
   for (const rv of rivulets) {
@@ -1249,11 +1274,11 @@ const soundLive = () => audio && soundOn && audio.ctx.state === 'running';
 // a drop landing in view
 // Light rain is sparse and quiet: only some landings are heard, and softly. Heavy rain is
 // every drop, at full strength.
-function tap(x, size) {
+function tap(x, size, hit = 0) {
   const h = SL.rain;
   if (!soundLive() || tapBudget < 1 || rand() > 0.12 + 0.88 * h * h) return;
   tapBudget -= 1;
-  playTap(x, Math.max(0, Math.min(1, size)), (0.35 + size * 0.45) * (0.2 + 0.8 * h * h));
+  playTap(x, Math.max(0, Math.min(1, size)), (0.35 + size * 0.45) * (0.2 + 0.8 * h * h) * (0.8 + 0.5 * hit));   // harder hits knock louder
 }
 // Loudness follows the rainfall slider: light rain is a few soft dots, heavy rain is dense
 // knocking over a fuller, brighter wash.
