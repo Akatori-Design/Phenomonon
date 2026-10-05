@@ -667,7 +667,8 @@ function step(dt) {
   while (lambda > 0) {
     if (rand() < Math.min(1, lambda)) {
       const x = rand() * simW, y = rand() * simH * 1.05 - simH * 0.05;
-      const r = minR + (maxR * 0.75 - minR) * Math.pow(rand(), 2);
+      // heavier rain falls in bigger drops: light rain is mostly fine drops, a downpour mostly large ones
+      const hv = SL.rain, r = minR + (maxR * (0.4 + 0.6 * hv) - minR) * Math.pow(rand(), 2.6 - 1.6 * hv);
       if (underHand(x, y, 0)) { lambda -= 1; continue; }
       // The heavier the rain, the harder each drop hits the glass: a hard hit splatters into a
       // flattened, ragged shape and throws a spray of tiny droplets around it.
