@@ -1174,21 +1174,24 @@ function playTap(x, size, gain) {
 }
 const soundLive = () => audio && soundOn && audio.ctx.state === 'running';
 // a drop landing in view
+// Light rain is sparse and quiet: only some landings are heard, and softly. Heavy rain is
+// every drop, at full strength.
 function tap(x, size) {
-  if (!soundLive() || tapBudget < 1) return;
+  const h = SL.rain;
+  if (!soundLive() || tapBudget < 1 || rand() > 0.12 + 0.88 * h * h) return;
   tapBudget -= 1;
-  playTap(x, Math.max(0, Math.min(1, size)), 0.35 + size * 0.45);
+  playTap(x, Math.max(0, Math.min(1, size)), (0.35 + size * 0.45) * (0.2 + 0.8 * h * h));
 }
 // Loudness follows the rainfall slider: light rain is a few soft dots, heavy rain is dense
 // knocking over a fuller, brighter wash.
 function stepSound(dt) {
   if (!audio) return;
-  tapBudget = Math.min(4, tapBudget + dt);   // at most ~60 in-view knocks a second
+  tapBudget = Math.min(4, tapBudget + dt * (0.1 + 0.9 * SL.rain * SL.rain));   // ~6 knocks a second in light rain, up to ~60 in a downpour
   const h = paused || !soundOn ? 0 : SL.rain, t = audio.ctx.currentTime;
   audio.wash.gain.setTargetAtTime(h * h * 0.22, t, 0.3);   // kept under the knocks
   audio.lpf.frequency.setTargetAtTime(400 + 1200 * h * h, t, 0.3);
   // rain striking the rest of the window, out of view
-  if (soundLive() && !paused && rand() < h * h * 0.45 * dt) playTap(rand() * simW, rand() * 0.4, 0.08 + rand() * 0.14 * h);
+  if (soundLive() && !paused && rand() < h * h * h * 0.45 * dt) playTap(rand() * simW, rand() * 0.4, (0.08 + rand() * 0.14) * h * h);
 }
 function startSound() {
   if (!soundOn) return;
