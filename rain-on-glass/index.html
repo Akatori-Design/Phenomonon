@@ -1121,22 +1121,33 @@ function initAudio() {
   const sr = ctx.sampleRate, master = ctx.createGain(), comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -12; comp.ratio.value = 3; comp.attack.value = 0.002; comp.release.value = 0.15;
   master.gain.value = 1; master.connect(comp); comp.connect(ctx.destination);
-  // Each drop is a short knock on the pane — "dot": a rounded body tone around 230–430 Hz with
-  // its overtone, and a soft click at the moment of impact so it reads on any speaker.
-  const taps = [];
-  for (let v = 0; v < 14; v++) {
-    const len = (sr * 0.12) | 0, buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
-    const body = 230 + Math.random() * 200, over = body * (2.4 + Math.random() * 0.5);
-    let lp = 0, peak = 0;
-    for (let i = 0; i < len; i++) {
-      const t = i / sr, attack = Math.min(1, t / 0.001);
-      lp += ((Math.random() * 2 - 1) - lp) * 0.35;
-      d[i] = attack * (
-        Math.sin(2 * Math.PI * body * t) * Math.exp(-t * 45) * 0.8
-        + Math.sin(2 * Math.PI * over * t) * Math.exp(-t * 80) * 0.45
-        + lp * Math.exp(-t * 450) * 0.8);
-      peak = Math.max(peak, Math.abs(d[i]));
+  // Each drop is a dull knock on the pane, not a note: a burst of noise shaped by a broad
+  // resonance (so there's no clear pitch), over a short low thump of the glass flexing.
+  const resonate = (x, f, q) => {   // two-pole bandpass, run in place
+    const w = 2 * Math.PI * f / sr, al = Math.sin(w) / (2 * q), a0 = 1 + al;
+    const b0 = al / a0, b2 = -al / a0, a1 = -2 * Math.cos(w) / a0, a2 = (1 - al) / a0;
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < x.length; i++) {
+      const y = b0 * x[i] + b2 * x2 - a1 * y1 - a2 * y2;
+      x2 = x1; x1 = x[i]; y2 = y1; y1 = y; x[i] = y;
     }
+  };
+  const taps = [];
+  for (let v = 0; v < 16; v++) {
+    const len = (sr * 0.09) | 0, buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    const knock = new Float32Array(len), thump = new Float32Array(len);
+    const kd = 110 + Math.random() * 80, td = 45 + Math.random() * 25;
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / sr, attack = Math.min(1, t / 0.0006), n = Math.random() * 2 - 1;
+      knock[i] = n * attack * Math.exp(-t * kd);
+      lp += (n - lp) * 0.04;
+      thump[i] = lp * attack * Math.exp(-t * td);
+    }
+    resonate(knock, 700 + Math.random() * 1100, 1.4 + Math.random() * 0.8);
+    resonate(thump, 140 + Math.random() * 80, 0.9);
+    let peak = 0;
+    for (let i = 0; i < len; i++) { d[i] = knock[i] * 0.9 + thump[i] * 1.5; peak = Math.max(peak, Math.abs(d[i])); }
     for (let i = 0; i < len; i++) d[i] /= peak;   // every variant hits at the same level
     taps.push(buf);
   }
@@ -1154,7 +1165,7 @@ function playTap(x, size, gain) {
   const { ctx, taps, master } = audio;
   const s = ctx.createBufferSource(), g = ctx.createGain();
   s.buffer = taps[(Math.random() * taps.length) | 0];
-  s.playbackRate.value = (1.15 - size * 0.45) * (0.9 + Math.random() * 0.2);   // bigger drops land lower
+  s.playbackRate.value = (1.1 - size * 0.35) * (0.92 + Math.random() * 0.16);   // bigger drops knock lower
   g.gain.value = gain;
   let out = g;
   if (ctx.createStereoPanner) { const pn = ctx.createStereoPanner(); pn.pan.value = (x / simW * 2 - 1) * 0.75; g.connect(pn); out = pn; }
