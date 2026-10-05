@@ -557,7 +557,12 @@ function resize() {
 const drops = [];
 const MAX = 1600;
 const rand = Math.random;
-const radii = () => ({ minR: 2.6 * S, maxR: (10 + 22 * P.size) * S });
+// Drop size slider: 100% is the largest raindrop (what used to be the 50% setting); lower settings
+// scale it down, to about a third at 0%.
+const radii = () => {
+  const maxR = 11.54 * S * (0.35 + 0.65 * SL.size);
+  return { minR: Math.min(2.6 * S, maxR * 0.3), maxR };
+};
 // The most water a drop can hold on the glass: below this radius it stays put, however long it
 // sits; once it grows past it (by merging), gravity wins and it slides.
 const holdR = () => radii().maxR * 0.9;
