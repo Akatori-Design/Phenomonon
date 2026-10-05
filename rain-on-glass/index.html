@@ -856,7 +856,15 @@ function step(dt) {
       const len = Math.hypot(d.x - px, d.y - py), steps = Math.ceil(len / (d.r * 0.4));
       for (let s = 1; s <= steps; s++) { const t = s / steps; eraseAt(px + (d.x - px) * t, py + (d.y - py) * t, d.r * 0.92); }
       if (d.y - d.r * 2 > simH || d.x < -d.r * 2 || d.x > simW + d.r * 2) d.dead = true;
+      else if (d.r > maxR * 1.4 && d.vy > 1.5 * S && rivulets.length < 30) {
+        // Enough water in one running drop to keep a channel open: it becomes a stream from here,
+        // running until its own water is spent unless more arrives to feed it.
+        const vol = (d.r / maxR) ** 3;
+        rivulets.push(newRivulet(d.x, d.y - d.r, { w: Math.min(6 * S, d.r * 0.4), flow: 1, stopAt: d.y + simH * Math.min(1.2, 0.12 * vol) * (0.7 + rand() * 0.6) }));
+        d.dead = true;
+      }
     }
+    if (d.dead) continue;
     eraseAt(d.x, d.y - d.r * 0.2, d.r * 0.85);
   }
   stepPulls(dt);
@@ -1076,7 +1084,7 @@ function stepRivulets(dt) {
     // Between surges the channel thins to a wet track and waits for more water. It dries up only
     // when the heavy rain stops, or when a wipe has cut it off from the water above.
     const target = rv.orphan || heavy === 0 ? 0 : 0.4;
-    rv.flow += (target - rv.flow) * (rv.orphan ? 0.004 : 0.0015) * dt;
+    rv.flow += (target - rv.flow) * (rv.orphan ? 0.004 : heavy > 0 ? 0.0015 : 0.003) * dt;   // without rain from above, a stream thins out faster
     if (rv.flow < 0.05) {
       for (let j = 0; j < pts.length; j += 2 + (rand() * 4 | 0)) {
         if (!pts[j].on) continue;
@@ -1185,7 +1193,7 @@ function stepRivulets(dt) {
 
     // surges of water travel down the connected part of the channel
     const reachY = f >= 0 ? (f > 0 ? rv.pts[f - 1].y : rv.y0) : lastY;
-    if (!rv.orphan && rand() < 0.012 * dt * (0.5 + heavy)) { addSurge(rv, rv.y0); rv.flow = Math.min(1.1, rv.flow + 0.3); }
+    if (!rv.orphan && heavy > 0 && rand() < 0.012 * dt * (0.5 + heavy)) { addSurge(rv, rv.y0); rv.flow = Math.min(1.1, rv.flow + 0.3); }   // fed from above only in heavy rain
     for (const sg of rv.surges) sg.y += sg.speed * dt;
     rv.surges = rv.surges.filter((sg) => {
       if (sg.y - sg.len * 0.5 < Math.min(reachY, simH + 10)) return true;
@@ -1198,7 +1206,7 @@ function stepRivulets(dt) {
     for (const d of drops) {
       if (d.dead) continue;
       if (touches(rv, d, reachY)) {
-        d.dead = true; addSurge(rv, d.y, Math.min(0.15, d.r / maxR * 0.12)); rv.flow = Math.min(1.1, rv.flow + 0.15);
+        d.dead = true; addSurge(rv, d.y, Math.min(0.15, d.r / maxR * 0.12)); rv.flow = Math.min(1.1, rv.flow + 0.05 * Math.min(2, (d.r / maxR) ** 3));   // a drop adds water in proportion to its volume
         continue;
       }
       const pl = rv.pool;
