@@ -77,7 +77,7 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
     <div class="btns">
       <button id="wipe" type="button">Wipe glass</button>
       <button id="pause" type="button">Pause</button>
-      <button id="sound" type="button" aria-pressed="true">Sound on</button>
+      <button id="sound" type="button" aria-pressed="true">Mute sound</button>
       <label class="file" for="photo">Use a photo</label>
       <input class="sr" type="file" id="photo" accept="image/*">
     </div>
@@ -934,8 +934,38 @@ function downhill(dir) {
   return { x: x / l, y: y / l };
 }
 
+// Streams that touch anywhere along their length become one thicker stream from that point
+// down: the narrower one ends at the touch and its water carries on in the other.
+let mergeAcc = 0;
+function mergeTouchingStreams() {
+  const live = rivulets.filter((r) => !r.orphan && !r.joined && r.pts.length > 2);
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) {
+      const A = live[i], B = live[j];
+      if (A.joined || B.joined) continue;
+      const y0 = Math.max(A.pts[0].y, B.pts[0].y), y1 = Math.min(A.pts[A.pts.length - 1].y, B.pts[B.pts.length - 1].y);
+      if (y1 <= y0) continue;
+      const touch = (streamWidth(A) + streamWidth(B)) * 0.9;
+      for (let y = y0; y <= y1; y += 3) {
+        const a = pointAt(A, y), b = pointAt(B, y);
+        if (!a || !b || !a.on || !b.on || Math.abs(a.x - b.x) >= touch) continue;
+        const [main, side] = A.w * A.flow >= B.w * B.flow ? [A, B] : [B, A];
+        const k = idxAtY(side.pts, y);
+        side.pts.length = Math.min(side.pts.length, k + 1);
+        const end = side.pts[side.pts.length - 1];
+        side.x = end.x; side.joined = main; side.carving = false; side.stopAt = Infinity; side.pool = null;
+        main.joins.push({ y: end.y, add: side.w * 0.55, from: side });
+        main.flow = Math.min(1.1, main.flow + 0.2);
+        break;
+      }
+    }
+  }
+}
+
 function stepRivulets(dt) {
   clock += dt;
+  mergeAcc += dt;
+  if (mergeAcc >= 10) { mergeAcc = 0; mergeTouchingStreams(); }
   const { maxR } = radii();
   const heavy = Math.max(0, (SL.rain - 0.7) / 0.3);   // streams only above 70% on the rainfall slider
   const want = Math.round(heavy * 16 * Math.sqrt(simW * simH / (1280 * 800)));
@@ -1089,22 +1119,25 @@ let audio = null, soundOn = true, tapBudget = 0;
 function initAudio() {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   const sr = ctx.sampleRate, master = ctx.createGain(), comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -12; comp.ratio.value = 3; comp.attack.value = 0.002; comp.release.value = 0.15;
   master.gain.value = 1; master.connect(comp); comp.connect(ctx.destination);
-  // Each drop is a short, deep "dot": a low body tone around 150–260 Hz, its overtone, and a
-  // muffled click. Low enough to sound heavy, high enough for laptop speakers to play.
+  // Each drop is a short knock on the pane — "dot": a rounded body tone around 230–430 Hz with
+  // its overtone, and a soft click at the moment of impact so it reads on any speaker.
   const taps = [];
   for (let v = 0; v < 14; v++) {
-    const len = (sr * 0.14) | 0, buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
-    const body = 150 + Math.random() * 110, over = body * (2.3 + Math.random() * 0.5);
-    let lp = 0;
+    const len = (sr * 0.12) | 0, buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    const body = 230 + Math.random() * 200, over = body * (2.4 + Math.random() * 0.5);
+    let lp = 0, peak = 0;
     for (let i = 0; i < len; i++) {
-      const t = i / sr, attack = Math.min(1, t / 0.0015);
-      lp += ((Math.random() * 2 - 1) - lp) * 0.18;
+      const t = i / sr, attack = Math.min(1, t / 0.001);
+      lp += ((Math.random() * 2 - 1) - lp) * 0.35;
       d[i] = attack * (
-        Math.sin(2 * Math.PI * body * t) * Math.exp(-t * 38) * 0.8
-        + Math.sin(2 * Math.PI * over * t) * Math.exp(-t * 75) * 0.35
-        + lp * Math.exp(-t * 300) * 0.6);
+        Math.sin(2 * Math.PI * body * t) * Math.exp(-t * 45) * 0.8
+        + Math.sin(2 * Math.PI * over * t) * Math.exp(-t * 80) * 0.45
+        + lp * Math.exp(-t * 450) * 0.8);
+      peak = Math.max(peak, Math.abs(d[i]));
     }
+    for (let i = 0; i < len; i++) d[i] /= peak;   // every variant hits at the same level
     taps.push(buf);
   }
   // the wash of rain on the rest of the window: brown-ish noise through a lowpass
@@ -1133,7 +1166,7 @@ const soundLive = () => audio && soundOn && audio.ctx.state === 'running';
 function tap(x, size) {
   if (!soundLive() || tapBudget < 1) return;
   tapBudget -= 1;
-  playTap(x, Math.max(0, Math.min(1, size)), 0.2 + size * 0.5);
+  playTap(x, Math.max(0, Math.min(1, size)), 0.35 + size * 0.45);
 }
 // Loudness follows the rainfall slider: light rain is a few soft dots, heavy rain is dense
 // knocking over a fuller, brighter wash.
@@ -1141,10 +1174,10 @@ function stepSound(dt) {
   if (!audio) return;
   tapBudget = Math.min(4, tapBudget + dt);   // at most ~60 in-view knocks a second
   const h = paused || !soundOn ? 0 : SL.rain, t = audio.ctx.currentTime;
-  audio.wash.gain.setTargetAtTime(h * h * 0.55, t, 0.3);
-  audio.lpf.frequency.setTargetAtTime(450 + 1800 * h * h, t, 0.3);
+  audio.wash.gain.setTargetAtTime(h * h * 0.22, t, 0.3);   // kept under the knocks
+  audio.lpf.frequency.setTargetAtTime(400 + 1200 * h * h, t, 0.3);
   // rain striking the rest of the window, out of view
-  if (soundLive() && !paused && rand() < h * h * 0.45 * dt) playTap(rand() * simW, rand() * 0.4, 0.05 + rand() * 0.1 * h);
+  if (soundLive() && !paused && rand() < h * h * 0.45 * dt) playTap(rand() * simW, rand() * 0.4, 0.08 + rand() * 0.14 * h);
 }
 function startSound() {
   if (!soundOn) return;
@@ -1155,7 +1188,7 @@ for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, 
 $('sound').addEventListener('click', () => {
   soundOn = !soundOn;
   if (soundOn) startSound();
-  $('sound').textContent = soundOn ? 'Sound on' : 'Sound off';
+  $('sound').textContent = soundOn ? 'Mute sound' : 'Turn sound on';
   $('sound').setAttribute('aria-pressed', String(soundOn));
 });
 
