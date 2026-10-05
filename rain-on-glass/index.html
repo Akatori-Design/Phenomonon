@@ -1,0 +1,1478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rain on Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&display=swap">
+<style>
+[hidden] { display: none !important; }
+:root {
+  /* Full-bleed WebGL window pane; one frosted control tray floats in the corner like a sticker on the glass */
+  --night: #07090d;
+  --ink: #e6ebf3;
+  --dim: #8d97aa;
+  --tray: rgba(12, 15, 22, 0.58);
+  --line: rgba(220, 232, 255, 0.14);
+  --accent: #a9ccff;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { margin: 0; background: var(--night); color: var(--ink); overflow: hidden; font-family: var(--mono); }
+#glass { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: default; }
+
+.tray {
+  position: fixed; left: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  width: min(290px, calc(100vw - 32px));
+  background: var(--tray); border: 1px solid var(--line); border-radius: 10px;
+  -webkit-backdrop-filter: blur(16px) saturate(1.2); backdrop-filter: blur(16px) saturate(1.2);
+  font-size: 12px; line-height: 1.4;
+}
+.tray summary {
+  list-style: none; cursor: pointer; padding: 10px 12px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.tray summary::-webkit-details-marker { display: none; }
+.tray summary::before { content: "+"; color: var(--dim); width: 10px; }
+.tray[open] summary::before { content: "−"; }
+.stat { margin-left: auto; color: var(--dim); letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+.rows { padding: 2px 12px 12px; display: grid; gap: 10px; }
+.row { display: grid; gap: 3px; }
+.row label { display: flex; justify-content: space-between; color: var(--dim); }
+.row output { color: var(--ink); font-variant-numeric: tabular-nums; }
+select { font: inherit; color: var(--ink); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+select option { background: var(--night); }
+input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.btns button, .btns .file {
+  font: inherit; color: var(--ink); background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer;
+}
+.btns button:hover, .btns .file:hover { background: rgba(255, 255, 255, 0.13); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.note { margin: 0; color: var(--dim); }
+#nogl[hidden] { display: none; }
+#nogl { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; text-align: center; color: var(--dim); }
+</style>
+</head>
+<body>
+<canvas id="glass" aria-label="Rain running down a window at night"></canvas>
+<div id="nogl" hidden>This effect needs WebGL 2. Try a current version of Chrome, Safari, Firefox or Edge.</div>
+
+<details class="tray" id="tray" open>
+  <summary>Window <span class="stat" id="stat">0 drops</span></summary>
+  <div class="rows">
+    <div class="row"><label for="rain">Rainfall <output id="rainOut"></output></label><input type="range" id="rain" min="0" max="1" step="0.01"></div>
+    <div class="row"><label for="size">Drop size <output id="sizeOut"></output></label><input type="range" id="size" min="0" max="1" step="0.01"></div>
+    <div class="row"><label for="mist">Condensation <output id="mistOut"></output></label><input type="range" id="mist" min="0" max="1" step="0.01"></div>
+    <div class="row"><label for="refract">Refraction <output id="refractOut"></output></label><input type="range" id="refract" min="0" max="1" step="0.01"></div>
+    <div class="row"><label for="fog">Fog <output id="fogOut"></output></label><input type="range" id="fog" min="0" max="1" step="0.01"></div>
+    <div class="row"><label for="scene">View outside</label>
+      <select id="scene"><option value="dusk">Dusk street</option><option value="night">Night city</option></select></div>
+    <div class="btns">
+      <button id="wipe" type="button">Wipe glass</button>
+      <button id="pause" type="button">Pause</button>
+      <button id="sound" type="button" aria-pressed="false">Sound off</button>
+      <label class="file" for="photo">Use a photo</label>
+      <input class="sr" type="file" id="photo" accept="image/*">
+    </div>
+    <p class="note">Drag across the glass to wipe it as if with three fingers. Above 70% rainfall, streams start running down the pane. Drop an image anywhere to look through it.</p>
+  </div>
+</details>
+
+<script>
+(() => {
+const $ = (id) => document.getElementById(id);
+const canvas = $('glass');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, powerPreference: 'high-performance' });
+if (!gl) { $('nogl').hidden = false; $('tray').hidden = true; return; }
+let hasFloat = !!gl.getExtension('EXT_color_buffer_float');
+
+// ---------- settings ----------
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Each slider's midpoint is the tuned look; either half of the track scales from there to 0 or 1.
+const MID = { rain: 0.7, size: 0.07, mist: 0.83, refract: 0.7, fog: 0.87 };
+const fromSlider = (k, v) => (v <= 0.5 ? MID[k] * v * 2 : MID[k] + (1 - MID[k]) * (v - 0.5) * 2);
+const P = {}, SL = {};   // P: values the simulation uses; SL: slider positions as shown (0–1)
+for (const k of Object.keys(MID)) {
+  const el = $(k), out = $(k + 'Out');
+  el.value = k === 'rain' && reduced ? 0.3 : 0.5;
+  const upd = () => { SL[k] = +el.value; P[k] = fromSlider(k, SL[k]); out.textContent = Math.round(+el.value * 100) + '%'; };
+  el.addEventListener('input', upd); upd();
+}
+if (innerWidth < 640) $('tray').open = false;
+
+// ---------- GL helpers ----------
+function shader(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs, names) {
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, vs)); gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; for (const n of names) u[n] = gl.getUniformLocation(p, n);
+  return { p, u };
+}
+
+// Each blob is an instanced quad holding an uneven capsule: a bottom circle (r1) and a top
+// circle (r2) joined by tangents, rotated by an angle. A round drop is the case r1 = r2, len = 0.
+// The fragment writes a metaball field (R) for the outline and a height (G) for the lens.
+// Overlapping fields fuse, so touching water reads as one body.
+const BLOB_VS = `#version 300 es
+layout(location=0) in vec2 aQuad;
+layout(location=1) in vec4 aA;   // x, y, r1, r2 (px)
+layout(location=2) in vec4 aB;   // len, angle, p0, p1
+uniform vec2 uView;
+uniform float uMargin;
+out vec2 vL;
+out vec2 vW;
+out vec4 vA;
+out vec4 vB;
+void main() {
+  float R = max(aA.z, aA.w) * (1.0 + uMargin + aB.z) + 1.5;
+  float lx = aQuad.x * R;
+  float ly = mix(-R, aB.x + R, aQuad.y * 0.5 + 0.5);
+  float c = cos(aB.y), s = sin(aB.y);
+  vec2 px = aA.xy + vec2(c * lx + s * ly, s * lx - c * ly);
+  gl_Position = vec4(px.x / uView.x * 2.0 - 1.0, 1.0 - px.y / uView.y * 2.0, 0.0, 1.0);
+  vL = vec2(lx, ly); vW = px; vA = aA; vB = aB;
+}`;
+const BLOB_FS = `#version 300 es
+precision highp float;
+in vec2 vL;
+in vec2 vW;
+in vec4 vA;
+in vec4 vB;
+uniform int uMode;
+out vec4 o;
+float sdCap(vec2 p, float r1, float r2, float h) {
+  p.x = abs(p.x);
+  if (h < abs(r1 - r2) + 0.01) return length(p) - max(r1, r2);
+  float b = (r1 - r2) / h, a = sqrt(1.0 - b * b);
+  float k = dot(p, vec2(-b, a));
+  if (k < 0.0) return length(p) - r1;
+  if (k > a * h) return length(p - vec2(0.0, h)) - r2;
+  return dot(p, vec2(a, b)) - r1;
+}
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+void main() {
+  float r1 = vA.z, r2 = vA.w, h = vB.x;
+  float s = sdCap(vL, r1, r2, h);
+  if (uMode == 0) {
+    // p0 = how uneven the edge is, p1 = seed: the outline wobbles with angle around the body
+    float th = atan(vL.y - h * 0.4, vL.x);
+    float sd = vB.w;
+    s -= (0.5 * sin(2.0 * th + sd) + 0.3 * sin(3.0 * th + sd * 1.7) + 0.2 * sin(5.0 * th + sd * 2.9)) * vB.z * r1;
+    float d = max(0.0, 1.0 + s / r1);
+    float f = d < 1.3 ? pow(1.0 - d * d / 1.69, 3.0) : 0.0;
+    o = vec4(f, max(0.0, 1.0 - d * d) * r1 / 32.0, 0.0, 0.0);
+  } else if (uMode == 3) {
+    // stream: a rounded bead of water sitting flat on the glass, so the crown is broad and gentle.
+    // Height keeps one smooth cross-section (blended with MAX). The outline field goes to alpha and
+    // adds up, so wherever water meets water the join rounds off the way a liquid does. Each
+    // segment only adds its own slab (plus end caps, p1 bits), so a stream doesn't swell itself.
+    float d = max(0.0, 1.0 + s / r1);
+    float f = d < 1.3 ? pow(1.0 - d * d / 1.69, 3.0) : 0.0;
+    int caps = int(vB.w + 0.5);
+    if ((vL.y < 0.0 && (caps & 1) == 0) || (vL.y >= h && (caps & 2) == 0)) f = 0.0;
+    float e = min(d, 1.0);
+    o = vec4(0.0, (1.0 - e * e * e * e) * r1 * 0.8 / 32.0, d < 1.0 ? 1.0 : 0.0, f);
+  } else if (uMode == 1) {
+    o = vec4(0.0, 0.0, 0.0, 1.0 - smoothstep(0.55, 1.0, 1.0 + s / r1));
+  } else {
+    // finger contact: p0 = pressure, p1 = smudge. A smudging finger leaves an even, softly mottled film.
+    // p1 = 0 for the pads; 1 + smudge for the lower segments, whose pressure fades toward the palm
+    float d = 1.0 + s / max(r1, r2);
+    float lower = step(0.5, vB.w);
+    float sm = lower * (vB.w - 1.0);
+    float a = 1.0 - smoothstep(mix(0.86, 0.45, sm), 1.0, d);
+    float blot = vnoise(vW * 0.025);
+    a *= vB.z * mix(1.0, 0.55 + 0.9 * blot, sm);
+    a *= mix(1.0, smoothstep(0.0, 0.6 * h, vL.y), lower);
+    o = vec4(0.0, 0.0, 0.0, clamp(a, 0.0, 1.0));
+  }
+}`;
+const blob_names = ['uView', 'uMargin', 'uMode'];
+const QUAD_VS = `#version 300 es
+layout(location=0) in vec2 aQuad;
+out vec2 vUv;
+void main() { vUv = aQuad * 0.5 + 0.5; gl_Position = vec4(aQuad, 0.0, 1.0); }`;
+const COPY_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTex;
+out vec4 o;
+void main() { o = vec4(texture(uTex, vUv).rg, 0.0, 0.0); }`;
+const FILL_FS = `#version 300 es
+precision highp float;
+uniform vec4 uColor;
+out vec4 o;
+void main() { o = uColor; }`;
+const FINAL_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uWater;
+uniform sampler2D uMist;
+uniform sampler2D uBg;
+uniform vec2 uTexel;
+uniform vec2 uBgScale;
+uniform vec2 uBgSize;
+uniform float uAspect;
+uniform float uRefract;
+uniform float uFog;
+uniform float uLod;
+const float T = 0.068;
+
+vec2 bgUv(vec2 uv) { return (uv - 0.5) * uBgScale + 0.5; }
+vec3 bgAt(vec2 uv, float lod) { return textureLod(uBg, bgUv(uv), lod).rgb; }
+vec3 bgBlur(vec2 uv, float lod) {
+  vec2 b = bgUv(uv);
+  vec2 r = exp2(lod) / uBgSize * 1.1;
+  vec3 c = textureLod(uBg, b, lod).rgb * 0.2;
+  for (int i = 0; i < 8; i++) {
+    float a = float(i) * 0.7853982 + 0.39;
+    c += textureLod(uBg, b + vec2(cos(a), sin(a)) * r, lod).rgb * 0.1;
+  }
+  return c;
+}
+void main() {
+  vec2 uv = vUv;
+  vec4 w = texture(uWater, uv);
+  float field = w.r + w.a;   // drops and mist in R, streams in A
+  float fw = max(fwidth(field), 1e-4);
+  float mask = smoothstep(T - fw, T + fw, field);
+
+  float hL = texture(uWater, uv - vec2(uTexel.x * 2.0, 0.0)).g;
+  float hR = texture(uWater, uv + vec2(uTexel.x * 2.0, 0.0)).g;
+  float hD = texture(uWater, uv - vec2(0.0, uTexel.y * 2.0)).g;
+  float hU = texture(uWater, uv + vec2(0.0, uTexel.y * 2.0)).g;
+  vec2 grad = vec2(hR - hL, hU - hD) * 8.0;
+  vec3 n = normalize(vec3(-grad * 0.65, 1.0));
+
+  // Glass: fogged where nothing has run through it yet, clear in the trails.
+  float fog = clamp(texture(uMist, uv).b, 0.0, 1.0) * uFog;
+  vec3 sharp = bgAt(uv, 0.8);
+  vec3 hazy = bgBlur(uv, uLod);
+  float lum = dot(hazy, vec3(0.299, 0.587, 0.114));
+  hazy = mix(hazy, vec3(lum), 0.25) * 0.8 + vec3(0.085, 0.09, 0.1);
+  vec3 glass = mix(sharp, hazy, fog);
+
+  // Drop: a tiny lens. Displacement grows toward the rim, so the view inside is flipped.
+  vec2 rUv = uv - n.xy * uRefract * vec2(uAspect, 1.0);
+  vec3 inside = mix(bgAt(rUv, 0.35) * 1.15, hazy * 1.12, 0.3) + 0.03;   // clear water: lighter than the fogged glass
+  float slope = length(n.xy);
+  float rim = smoothstep(0.45, 0.77, slope);
+  float stream = clamp(w.b, 0.0, 1.0);
+  inside *= 1.0 - rim * mix(0.45, 0.3, stream);
+  float outline = 1.0 - smoothstep(T, T * 1.9, field);   // thin dark line where the surface turns away
+  inside = mix(inside, inside * 0.28, outline * 0.8);
+  inside += hazy * smoothstep(0.25, 0.7, slope) * max(-n.y, 0.0) * 0.9;
+  vec3 L = normalize(vec3(-0.4, 0.75, 0.9));
+  float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 90.0);
+  inside += spec * 0.75 * (1.0 - stream);
+  // streams catch the light across their flat crown: a soft, uneven sheen over roughly the middle half
+  float crown = (1.0 - smoothstep(0.06, 0.5, slope)) * stream;
+  float vary = 0.7 + 0.3 * sin(uv.y * 37.0 + uv.x * 11.0) * sin(uv.y * 13.0 - uv.x * 7.0);
+  inside += (vec3(0.08) + hazy * 0.1) * crown * vary;
+
+  vec3 col = mix(glass, inside, mask);
+  float v = length((uv - 0.5) * vec2(1.0, 0.9));
+  col *= mix(1.0, 0.72, smoothstep(0.4, 0.9, v));
+  o = vec4(col, 1.0);
+}`;
+
+const blob = program(BLOB_VS, BLOB_FS, blob_names);
+const copy = program(QUAD_VS, COPY_FS, ['uTex']);
+const fill = program(QUAD_VS, FILL_FS, ['uColor']);
+const fin = program(QUAD_VS, FINAL_FS, ['uWater', 'uMist', 'uBg', 'uTexel', 'uBgScale', 'uBgSize', 'uAspect', 'uRefract', 'uFog', 'uLod']);
+
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+const instBuf = gl.createBuffer();
+
+const vaoQuad = gl.createVertexArray();
+gl.bindVertexArray(vaoQuad);
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+const vaoInst = gl.createVertexArray();
+gl.bindVertexArray(vaoInst);
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+gl.bufferData(gl.ARRAY_BUFFER, 32, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 0); gl.vertexAttribDivisor(1, 1);
+gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 16); gl.vertexAttribDivisor(2, 1);
+gl.bindVertexArray(null);
+
+function makeTarget(w, h) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  if (hasFloat) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  if (hasFloat && gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.deleteFramebuffer(fb); gl.deleteTexture(tex); hasFloat = false;
+    return makeTarget(w, h);
+  }
+  return { tex, fb, w, h };
+}
+function freeTarget(t) { gl.deleteFramebuffer(t.fb); gl.deleteTexture(t.tex); }
+function clearTarget(t, c) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb); gl.viewport(0, 0, t.w, t.h);
+  gl.clearColor(c[0], c[1], c[2], c[3]); gl.clear(gl.COLOR_BUFFER_BIT);
+}
+
+class Batch {
+  constructor() { this.a = new Float32Array(4096 * 8); this.n = 0; }
+  push(x, y, r1, r2, len, ang, p0, p1) {
+    if ((this.n + 1) * 8 > this.a.length) { const b = new Float32Array(this.a.length * 2); b.set(this.a); this.a = b; }
+    const i = this.n++ * 8, a = this.a;
+    a[i] = x; a[i + 1] = y; a[i + 2] = r1; a[i + 3] = r2; a[i + 4] = len; a[i + 5] = ang; a[i + 6] = p0; a[i + 7] = p1;
+  }
+}
+const droplets = new Batch(), erase = new Batch(), wipes = new Batch(), beads = new Batch(), dropQuads = new Batch(), streams = new Batch();
+
+function drawBlobs(b, mode, margin) {
+  if (!b.n) return;
+  gl.useProgram(blob.p);
+  gl.uniform2f(blob.u.uView, simW, simH);
+  gl.uniform1f(blob.u.uMargin, margin);
+  gl.uniform1i(blob.u.uMode, mode);
+  gl.bindVertexArray(vaoInst);
+  gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, b.a.subarray(0, b.n * 8), gl.DYNAMIC_DRAW);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.n);
+}
+function drawFill(r, g, b, a) {
+  gl.useProgram(fill.p);
+  gl.uniform4f(fill.u.uColor, r, g, b, a);
+  gl.bindVertexArray(vaoQuad);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// ---------- background: a night street seen through the window ----------
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function paintCity() {
+  const w = 2048, h = 1280;
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  const R = mulberry32(11), rnd = (a, b) => a + (b - a) * R();
+  const rgba = (col, a) => `rgba(${col[0]},${col[1]},${col[2]},${a})`;
+  const glow = (gx, gy, r, col, a) => {
+    const g = x.createRadialGradient(gx, gy, 0, gx, gy, r);
+    g.addColorStop(0, rgba(col, a)); g.addColorStop(0.22, rgba(col, a * 0.45)); g.addColorStop(1, rgba(col, 0));
+    x.fillStyle = g; x.fillRect(gx - r, gy - r, r * 2, r * 2);
+  };
+  const horizon = h * 0.7;
+
+  let g = x.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#04060c'); g.addColorStop(0.45, '#0e1322'); g.addColorStop(0.69, '#2c2333');
+  g.addColorStop(0.72, '#120f17'); g.addColorStop(1, '#060608');
+  x.fillStyle = g; x.fillRect(0, 0, w, h);
+
+  x.globalCompositeOperation = 'lighter';
+  glow(w * 0.28, horizon, 760, [255, 130, 60], 0.16);
+  glow(w * 0.76, horizon, 640, [110, 130, 255], 0.12);
+  x.globalCompositeOperation = 'source-over';
+
+  const layers = [
+    { col: '#10121c', minH: 140, maxH: 430, lit: 0.1, a: 0.5 },
+    { col: '#0a0b11', minH: 220, maxH: 660, lit: 0.17, a: 0.9 },
+  ];
+  const beacons = [];
+  for (const L of layers) {
+    let bx = -rnd(0, 80);
+    while (bx < w) {
+      const bw = rnd(80, 220), bh = rnd(L.minH, L.maxH), top = horizon - bh;
+      x.fillStyle = L.col; x.fillRect(bx, top, bw, bh + 4);
+      const cw = rnd(9, 15), ch = rnd(12, 19), gx = rnd(5, 9), gy = rnd(7, 12), warm = R() < 0.7;
+      for (let yy = top + gy; yy < horizon - ch; yy += ch + gy) {
+        for (let xx = bx + gx; xx < bx + bw - cw; xx += cw + gx) {
+          if (R() < L.lit) {
+            const col = warm ? [255, (175 + rnd(0, 60)) | 0, 105] : [170, 205, 255];
+            x.fillStyle = rgba(col, L.a * rnd(0.45, 1)); x.fillRect(xx, yy, cw, ch);
+          }
+        }
+      }
+      if (R() < 0.3) beacons.push([bx + bw / 2, top - 6]);
+      bx += bw + rnd(-12, 26);
+    }
+  }
+
+  x.globalCompositeOperation = 'lighter';
+  for (const [bx, by] of beacons) { glow(bx, by, 50, [255, 40, 30], 0.7); glow(bx, by, 6, [255, 120, 100], 1); }
+  const neon = [[255, 60, 170], [60, 225, 255], [150, 255, 120], [255, 125, 40]];
+  for (let i = 0; i < 6; i++) {
+    const nx = rnd(60, w - 220), ny = rnd(horizon - 300, horizon - 30), nw = rnd(60, 150), nh = rnd(10, 18);
+    const col = neon[(R() * neon.length) | 0];
+    x.fillStyle = rgba(col, 0.95); x.fillRect(nx, ny, nw, nh);
+    glow(nx + nw / 2, ny + nh / 2, nw * 1.1, col, 0.35);
+  }
+  for (let i = 0; i < 9; i++) {
+    const sx = i * w / 8 + rnd(-40, 40), sy = horizon + rnd(25, 60);
+    glow(sx, sy, 170, [255, 155, 55], 0.5); glow(sx, sy, 16, [255, 225, 175], 1);
+    const r = x.createLinearGradient(0, sy, 0, h);
+    r.addColorStop(0, rgba([255, 150, 60], 0.22)); r.addColorStop(1, rgba([255, 150, 60], 0));
+    x.fillStyle = r; x.fillRect(sx - 14, sy + 20, 28, h - sy);
+  }
+  for (let i = 0; i < 16; i++) {
+    const cx = rnd(0, w), cy = rnd(h * 0.84, h * 0.96), head = R() < 0.45, sep = rnd(26, 46);
+    const col = head ? [255, 244, 222] : [255, 38, 28];
+    for (const ox of [0, sep]) { glow(cx + ox, cy, 70, col, 0.55); glow(cx + ox, cy, 9, col, 1); }
+    const r = x.createLinearGradient(0, cy, 0, cy + 180);
+    r.addColorStop(0, rgba(col, 0.28)); r.addColorStop(1, rgba(col, 0));
+    x.fillStyle = r; x.fillRect(cx - 8, cy + 8, sep + 16, 180);
+  }
+  glow(w * 0.62, horizon + 40, 60, [80, 255, 140], 0.8); glow(w * 0.62, horizon + 40, 8, [180, 255, 200], 1);
+  x.globalCompositeOperation = 'source-over';
+  return c;
+}
+
+// An overcast evening street, mostly read as soft colour through the fogged pane.
+function paintDusk() {
+  const w = 2048, h = 1280;
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  const R = mulberry32(5), rnd = (a, b) => a + (b - a) * R();
+  const pick = (arr) => arr[(R() * arr.length) | 0];
+  let g = x.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#6e8399'); g.addColorStop(0.35, '#93a6ba'); g.addColorStop(0.62, '#62717f'); g.addColorStop(1, '#2a3038');
+  x.fillStyle = g; x.fillRect(0, 0, w, h);
+  // facades and columns in cold blue-greys
+  for (let i = 0; i < 22; i++) {
+    x.globalAlpha = rnd(0.5, 0.9);
+    x.fillStyle = pick(['#34404d', '#4b5968', '#27303a', '#7f91a4', '#a9b8c6', '#5d6c7c']);
+    x.fillRect(rnd(-100, w), rnd(-50, h * 0.55), rnd(60, 300), h);
+  }
+  x.globalAlpha = 1;
+  // window grids give the inverted views inside drops something to resolve
+  for (let i = 0; i < 260; i++) {
+    x.fillStyle = pick(['rgba(230,238,245,0.5)', 'rgba(40,48,58,0.6)', 'rgba(255,214,140,0.55)']);
+    x.fillRect(rnd(0, w), rnd(0, h * 0.7), rnd(10, 26), rnd(14, 30));
+  }
+  const glowRect = (gx, gy, gw, gh, col, blur) => {
+    x.save(); x.shadowColor = col; x.shadowBlur = blur; x.fillStyle = col; x.fillRect(gx, gy, gw, gh); x.restore();
+  };
+  glowRect(w * 0.27, h * 0.03, 360, 80, '#f29a3e', 60);        // shop sign
+  glowRect(w * 0.47, h * 0.28, 250, 330, '#ffcf66', 90);       // lit window
+  glowRect(w * 0.3, h * 0.24, 230, 120, '#7d4fa8', 40);        // purple panel
+  glowRect(w * 0.84, h * 0.28, 160, 210, '#9b3f8d', 50);       // magenta sign
+  glowRect(w * 0.08, h * 0.12, 120, 300, '#c7d6e4', 30);       // pale doorway
+  glowRect(w * 0.62, h * 0.08, 90, 60, '#5fb7c9', 30);         // teal light
+  // a figure with an umbrella, dark against the light
+  x.fillStyle = '#141a22';
+  x.beginPath(); x.ellipse(w * 0.74, h * 0.27, 150, 60, 0, Math.PI, 0); x.fill();
+  x.fillRect(w * 0.74 - 60, h * 0.27, 120, h * 0.55);
+  // street: car lights and their reflections on wet asphalt
+  g = x.createLinearGradient(0, h * 0.7, 0, h);
+  g.addColorStop(0, 'rgba(20,24,30,0.2)'); g.addColorStop(1, 'rgba(15,18,22,0.85)');
+  x.fillStyle = g; x.fillRect(0, h * 0.7, w, h * 0.3);
+  glowRect(w * 0.06, h * 0.72, 260, 90, '#eef3f8', 50);
+  glowRect(w * 0.77, h * 0.74, 60, 26, '#e3403a', 40);
+  glowRect(w * 0.86, h * 0.74, 60, 26, '#e3403a', 40);
+  glowRect(w * 0.45, h * 0.8, 200, 40, '#ffb04a', 50);
+  return c;
+}
+const scenes = { dusk: paintDusk, night: paintCity };
+const bgTex = gl.createTexture();
+let bgW = 1, bgH = 1;
+function setBackground(src) {
+  gl.bindTexture(gl.TEXTURE_2D, bgTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+  bgW = src.width; bgH = src.height;
+}
+setBackground(paintDusk());
+$('scene').addEventListener('change', (e) => setBackground(scenes[e.target.value]()));
+
+async function loadPhoto(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  setBackground(c);
+}
+$('photo').addEventListener('change', (e) => loadPhoto(e.target.files[0]));
+addEventListener('dragover', (e) => e.preventDefault());
+addEventListener('drop', (e) => { e.preventDefault(); loadPhoto(e.dataTransfer.files[0]); });
+
+// ---------- sizing ----------
+let simW = 0, simH = 0, S = 1, D = null, W = null;
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  simW = Math.max(1, Math.round(innerWidth)); simH = Math.max(1, Math.round(innerHeight));
+  S = Math.max(0.6, Math.min(1.4, Math.min(simW, simH) / 820));
+  canvas.width = Math.round(simW * dpr); canvas.height = Math.round(simH * dpr);
+  if (!D || D.w !== simW || D.h !== simH) {
+    if (D) { freeTarget(D); freeTarget(W); }
+    D = makeTarget(simW, simH); W = makeTarget(simW, simH);
+    clearTarget(D, [0, 0, 1, 0]);
+  }
+  for (const d of drops) if (d.x > simW + d.r || d.y > simH + d.r) d.dead = true;
+  hand = handGeom();
+  resetWipeGrid();
+}
+
+// ---------- simulation ----------
+const drops = [];
+const MAX = 1000;
+const rand = Math.random;
+const radii = () => ({ minR: 2.6 * S, maxR: (10 + 22 * P.size) * S });
+const bead = (b, x, y, r, wob = 0.08) => b.push(x, y, r, r, 0, 0, wob, rand() * 6.283);
+const eraseAt = (x, y, r) => erase.push(x, y, r, r, 0, 0, 0, 0);
+// Small leftover water (trail beads, splashes, what a wipe or a dried stream leaves) is made of
+// real drops: anything touching merges, running drops pick it up, and the smallest evaporate.
+const smallDrop = (x, y, r) => addDrop(x, y, r, { stick: 3 });
+
+// Where the glass was wiped (1 = freshly wiped, fading as it fogs back over). The edge of a wipe
+// holds a thin ridge of film that resists water crossing it.
+// How fast condensation forms back over wiped glass, per frame; more condensation, faster.
+// The fog and the ridge of film at wipe lines both follow it, so a wipe line's resistance is gone
+// exactly when the glass has fogged back over.
+const condenseRate = () => 0.0006 + 0.0014 * P.mist;
+const WG = 6;
+let wgW = 0, wgH = 0, wg = new Float32Array(0);
+function resetWipeGrid() { wgW = Math.ceil(simW / WG) + 2; wgH = Math.ceil(simH / WG) + 2; wg = new Float32Array(wgW * wgH); }
+function markWiped(x, y, r, v) {
+  const x0 = Math.max(0, Math.floor((x - r) / WG)), x1 = Math.min(wgW - 1, Math.ceil((x + r) / WG));
+  const y0 = Math.max(0, Math.floor((y - r) / WG)), y1 = Math.min(wgH - 1, Math.ceil((y + r) / WG));
+  for (let j = y0; j <= y1; j++) {
+    for (let i = x0; i <= x1; i++) {
+      if ((i * WG - x) ** 2 + (j * WG - y) ** 2 > r * r) continue;
+      const k = j * wgW + i; if (wg[k] < v) wg[k] = v;
+    }
+  }
+}
+function wipedAt(x, y) {
+  const fx = Math.max(0, Math.min(wgW - 1.001, x / WG)), fy = Math.max(0, Math.min(wgH - 1.001, y / WG));
+  const i = fx | 0, j = fy | 0, u = fx - i, v = fy - j, k = j * wgW + i;
+  return (wg[k] * (1 - u) + wg[k + 1] * u) * (1 - v) + (wg[k + wgW] * (1 - u) + wg[k + wgW + 1] * u) * v;
+}
+// 0 on open glass, up to 1 right on a wipe line
+function wipeEdge(x, y) {
+  const gx = wipedAt(x + WG, y) - wipedAt(x - WG, y), gy = wipedAt(x, y + WG) - wipedAt(x, y - WG);
+  return Math.min(1, Math.hypot(gx, gy) * 1.5);
+}
+
+function addDrop(x, y, r, o = {}) {
+  const d = { x, y, r, vx: 0, vy: 0, moving: false, spread: o.spread || 0, trailY: y, gap: 0, stick: o.stick || 1 + rand(), dead: false, flat: 0, hold: 0, tx: 1, ty: 0, passY: null };
+  reshape(d);
+  for (const e of drops) {
+    if (e.dead) continue;
+    const dx = e.x - x, dy = e.y - y, rr = (e.r + r) * 0.95;
+    if (dx * dx + dy * dy < rr * rr) { merge(e, d); return e; }
+  }
+  if (drops.length >= MAX) return null;
+  drops.push(d);
+  return d;
+}
+// Resting drops are never round: they pin unevenly on the glass and sag under their own weight.
+function reshape(d) {
+  d.wob = 0.05 + rand() * 0.12; d.seed = rand() * 6.283; d.sag = rand(); d.tilt = (rand() - 0.5) * 0.3;
+}
+// Touching drops become one drop holding their combined volume, shaped like the larger one.
+function merge(a, b) {
+  const ma = a.r ** 3, mb = b.r ** 3, wasMoving = a.moving;
+  a.x = (a.x * ma + b.x * mb) / (ma + mb);
+  a.y = (a.y * ma + b.y * mb) / (ma + mb);
+  a.r = Math.cbrt(ma + mb);
+  a.moving = a.moving || b.moving;
+  a.vy = Math.max(a.vy, b.vy) * 0.9 + (a.moving ? 0.3 : 0);
+  a.vx = (a.vx * ma + b.vx * mb) / (ma + mb);
+  a.stick = Math.min(a.stick, b.stick);
+  a.spread = Math.max(a.spread, 0.18);
+  if (mb > ma) { a.wob = b.wob; a.seed = b.seed; a.sag = b.sag; a.tilt = b.tilt; }
+  if (a.moving && !wasMoving) { a.trailY = a.y; a.gap = a.r; }
+  b.dead = true;
+}
+
+let grid = new Map(), cell = 64;
+function coalesce(maxR) {
+  let big = maxR;
+  for (const d of drops) if (!d.dead && d.r > big) big = d.r;
+  grid.clear(); cell = big * 2;
+  for (const d of drops) {
+    if (d.dead) continue;
+    const k = ((d.x / cell) | 0) * 4096 + ((d.y / cell) | 0);
+    let arr = grid.get(k); if (!arr) grid.set(k, arr = []); arr.push(d);
+  }
+  for (const d of drops) {
+    if (d.dead) continue;
+    const cx = (d.x / cell) | 0, cy = (d.y / cell) | 0;
+    scan: for (let gx = cx - 1; gx <= cx + 1; gx++) {
+      for (let gy = cy - 1; gy <= cy + 1; gy++) {
+        const arr = grid.get(gx * 4096 + gy);
+        if (!arr) continue;
+        for (const b of arr) {
+          if (b === d || b.dead) continue;
+          const dx = b.x - d.x, dy = b.y - d.y, rr = (d.r * (1 + 0.9 * (d.flat || 0)) + b.r * (1 + 0.9 * (b.flat || 0))) * 0.95;   // drops spread along a wipe line reach further
+          if (dx * dx + dy * dy >= rr * rr) continue;
+          if (b.r > d.r) { merge(b, d); break scan; }
+          merge(d, b);
+        }
+      }
+    }
+  }
+}
+
+// While the fingers rest on the glass they are an obstacle: water can't run through them.
+let handNow = null;
+function handCircles() {
+  if (!stroke || !lastPt || !hand) return null;
+  const c = Math.cos(handA), s = Math.sin(handA);
+  return hand.circles.map((k) => ({ x: lastPt.x + c * k.x - s * k.y, y: lastPt.y + s * k.x + c * k.y, r: k.r }));
+}
+const underHand = (x, y, pad) => handNow && handNow.some((c) => (x - c.x) ** 2 + (y - c.y) ** 2 < (c.r + pad) ** 2);
+
+function step(dt) {
+  handNow = handCircles();
+  const fade = Math.pow(1 - condenseRate(), dt);
+  for (let i = 0; i < wg.length; i++) wg[i] *= fade;
+  const { minR, maxR } = radii();
+  const rSlide = minR + (maxR - minR) * 0.42;
+  const area = simW * simH / (1280 * 800);
+
+  // rain landing on the pane, with a small splash of satellite droplets
+  let lambda = P.rain * P.rain * 1.8 * area * dt;
+  while (lambda > 0) {
+    if (rand() < Math.min(1, lambda)) {
+      const x = rand() * simW, y = rand() * simH * 1.05 - simH * 0.05;
+      const r = minR + (maxR * 0.75 - minR) * Math.pow(rand(), 2);
+      if (underHand(x, y, 0)) { lambda -= 1; continue; }
+      addDrop(x, y, r, { spread: 0.4 + rand() * 0.6 });
+      tap(x, (r - minR) / (maxR - minR));
+      const n = rand() * 3 | 0;
+      for (let i = 0; i < n; i++) {
+        const a = rand() * Math.PI * 2, dist = r * (1.3 + rand() * 1.8);
+        smallDrop(x + Math.cos(a) * dist, y + Math.sin(a) * dist, (0.8 + rand() * 1.1) * S);
+      }
+    }
+    lambda -= 1;
+  }
+  // condensation: fine mist that collects between the drops
+  let mist = P.mist * P.mist * 60 * area * dt;
+  while (mist > 0) {
+    if (rand() < Math.min(1, mist)) bead(droplets, rand() * simW, rand() * simH, (0.6 + rand() * rand() * 2.2) * S, 0.22);
+    mist -= 1;
+  }
+
+  for (const d of drops) {
+    if (d.dead) continue;
+    d.spread *= Math.pow(0.88, dt);
+    if (!d.moving && d.r < minR * 1.4) {
+      d.r -= (d.r < minR ? 0.006 : 0.003) * S * dt;
+      if (d.r < 0.5 * S) { d.dead = true; continue; }
+    }
+    if (!d.moving) {
+      // Pinned until heavy enough; heavier drops break free sooner.
+      const over = (d.r - rSlide) / (maxR - rSlide);
+      if (over > 0 && rand() < (0.004 + over * 0.03) * dt / d.stick) {
+        d.moving = true; d.vy = Math.max(d.vy, 0.2); d.trailY = d.y; d.gap = d.r * (0.8 + rand());
+      }
+    } else {
+      const px = d.x, py = d.y;
+      const m = Math.min(1.5, d.r / maxR);
+      d.vy += 0.05 * m * S * dt * (0.5 + rand());
+      if (rand() < 0.015 * dt) d.vy *= 0.1 + rand() * 0.4; // snags on dirt and dry glass
+      d.vy *= Math.pow(0.982, dt);
+      d.vx += (rand() - 0.5) * 0.35 * S * dt;
+      d.vx *= Math.pow(0.86, dt);
+      // At a wipe line the drop's front meets the ridge of film and stops. It settles along the
+      // line, spreading sideways and getting shorter, until its weight breaks through at one point;
+      // then all of it runs through that gap and on down.
+      if (d.passY != null && d.y > d.passY) d.passY = null;
+      const ey = d.y + d.r * 0.8, res = d.passY != null ? 0 : wipeEdge(d.x, ey);
+      if (res > 0.25) {
+        const gx = wipedAt(d.x + WG, ey) - wipedAt(d.x - WG, ey), gy = wipedAt(d.x, ey + WG) - wipedAt(d.x, ey - WG);
+        const gl = Math.hypot(gx, gy) || 1;
+        d.tx = -gy / gl; d.ty = gx / gl;
+        d.flat += (Math.min(1, res * 1.2) - d.flat) * 0.06 * dt;
+        d.hold += dt;
+        d.vy = 0; d.vx *= Math.pow(0.5, dt);
+        if (d.hold > 40 + 160 * (1 - Math.min(1, d.r / maxR))) {   // heavier drops break through sooner
+          d.passY = d.y + d.r * 3; d.hold = 0; d.vy = 0.6 * S;
+        }
+      } else {
+        d.hold = 0;
+        d.flat *= Math.pow(0.8, dt);
+      }
+      d.x += d.vx * dt; d.y += d.vy * dt;
+      if (handNow) {
+        for (let it = 0; it < 3; it++) {
+          let nx = 0, ny = 0, depth = 0;
+          for (const c of handNow) {
+            const ex = d.x - c.x, ey = d.y - c.y, R = c.r + d.r * 0.7, dist = Math.hypot(ex, ey) || 1;
+            if (dist < R && R - dist > depth) { depth = R - dist; nx = ex / dist; ny = ey / dist; }
+          }
+          if (!depth) break;
+          d.x += nx * depth; d.y += ny * depth;
+          const vn = d.vx * nx + d.vy * ny;
+          if (vn < 0) { d.vx -= vn * nx; d.vy -= vn * ny; }
+          d.vy *= 0.7;   // drag against the skin; on top of a fingertip the drop just sits and gathers
+        }
+      }
+
+      // leave a beaded trail behind, losing a little water each time
+      if (d.y - d.trailY > d.gap && d.r > minR * 1.4) {
+        const tr = d.r * (0.16 + rand() * 0.22);
+        smallDrop(d.x + (rand() - 0.5) * d.r * 0.4, d.y - d.r * (1.1 + Math.min(1, d.vy / (3 * S)) * 1.4) - tr, tr);
+        d.r = Math.sqrt(Math.max(minR * minR, d.r * d.r - tr * tr * 0.5));
+        d.trailY = d.y; d.gap = d.r * (2 + rand() * 5);
+      }
+      // A running drop wets the glass behind it and loses water the further it goes, small ones
+      // proportionally faster. Without more water arriving from above it slows and comes to rest.
+      const ds = Math.hypot(d.x - px, d.y - py);
+      if (ds > 0) d.r = Math.cbrt(Math.max((0.5 * S) ** 3, d.r ** 3 - 0.09 * S * d.r * ds));
+      if (d.r < rSlide * 0.65 && d.vy < 0.4 && d.hold === 0 && d.flat < 0.05) { d.moving = false; reshape(d); }
+      else if (d.r < rSlide * 0.5 && d.hold === 0) d.vy *= Math.pow(0.9, dt);   // too little water left to keep going
+
+      // wipe mist and fog along the path
+      const len = Math.hypot(d.x - px, d.y - py), steps = Math.ceil(len / (d.r * 0.4));
+      for (let s = 1; s <= steps; s++) { const t = s / steps; eraseAt(px + (d.x - px) * t, py + (d.y - py) * t, d.r * 0.92); }
+      if (d.y - d.r * 2 > simH || d.x < -d.r * 2 || d.x > simW + d.r * 2) d.dead = true;
+    }
+    eraseAt(d.x, d.y - d.r * 0.2, d.r * 0.85);
+  }
+  coalesce(maxR);
+  stepRivulets(dt);
+  let j = 0;
+  for (let i = 0; i < drops.length; i++) if (!drops[i].dead) drops[j++] = drops[i];
+  drops.length = j;
+}
+
+function buildDropQuads() {
+  const { minR, maxR } = radii(), rSlide = minR + (maxR - minR) * 0.42;
+  for (const d of drops) {
+    const sp = 1 + d.spread;
+    if (d.moving && d.flat > 0.05) {
+      // sitting along a wipe line: smeared out along it, flatter and shorter
+      const f = d.flat, len = d.r * 1.8 * f, rr = d.r * sp * (1 - 0.3 * f);
+      dropQuads.push(d.x - d.tx * len / 2, d.y - d.ty * len / 2 + d.r * 0.2 * f, rr, rr * (1 - 0.1 * f), len, Math.atan2(d.tx, -d.ty), 0.04, d.seed);
+    } else if (d.moving) {
+      // one body: a full round bottom carrying the weight, a slightly narrower top, leaning with the run
+      const st = Math.min(1, d.vy / (3 * S));
+      const ang = -Math.atan2(d.vx, Math.max(0.3, d.vy)) * 0.8;
+      dropQuads.push(d.x, d.y, d.r * sp, d.r * (0.74 - 0.14 * st), d.r * (0.5 + 1.5 * st), ang, 0.03, d.seed);
+    } else {
+      const g = Math.min(1, d.r / rSlide) * (0.4 + 0.6 * d.sag);   // heavier drops sag more
+      dropQuads.push(d.x, d.y, d.r * sp, d.r * sp * (0.9 - 0.2 * g), d.r * (0.1 + 0.55 * g), d.tilt, d.wob, d.seed);
+    }
+  }
+  for (const rv of rivulets) {
+    const pts = rv.pts, wd = streamWidth(rv);
+    for (let j = 1; j < pts.length; j++) {
+      const a = pts[j - 1], b = pts[j];
+      if (!a.on || !b.on) continue;
+      const ra = (wd * a.k + joinAdd(rv, a.y)) * surgeAt(rv, a.y), rb = (wd * b.k + joinAdd(rv, b.y)) * surgeAt(rv, b.y);
+      const caps = (pts[j + 1] && pts[j + 1].on ? 0 : 1) | (j >= 2 && pts[j - 2].on ? 0 : 2);
+      streams.push(b.x, b.y, rb, ra, Math.hypot(a.x - b.x, a.y - b.y), Math.atan2(a.x - b.x, b.y - a.y), 0, caps);
+    }
+    if ((rv.carving || rv.stalled) && pts.length) {
+      const h = pts[pts.length - 1], g = rv.stalled ? 1.5 : 1.9;   // a waiting tip is a smaller, rounded end
+      dropQuads.push(h.x, h.y, wd * g, wd * 1.3, wd * 2, 0, 0.04, rv.phase);
+    }
+    if (rv.pool && rv.pool.dir) edgeFilm(rv.pool.x, rv.pool.y, rv.pool.up, rv.pool.down, rv.pool.th, rv.ph, rv.pool.dir);
+    if (rv.spill) {
+      const sp = rv.spill;   // the film draining into the new channel
+      edgeFilm(sp.x, sp.y, sp.up * sp.t, sp.down * (0.5 + 0.5 * sp.t), sp.th * sp.t, rv.ph, sp.dir);
+    }
+  }
+  if (stroke && stroke.water > 0) {
+    const band = puddle();
+    for (let i = 0; i + 1 < band.length; i++) {
+      const p = band[i], q = band[i + 1], dx = q.x - p.x, dy = q.y - p.y;
+      dropQuads.push(p.x, p.y, p.t, q.t, Math.hypot(dx, dy), Math.atan2(dx, -dy), 0.06, i * 0.7 + stroke.ph[0]);
+    }
+  }
+}
+
+// ---------- streams: in heavy rain, water finds channels and keeps running ----------
+const rivulets = [];
+let clock = 0;
+// How much a passing surge of water swells the channel, and how long a stretch it covers.
+const SURGE_AMP = [0.14, 0.28], SURGE_LEN = [0.05, 0.1];
+
+function newRivulet(x0, y0, o = {}) {
+  return {
+    pts: [], y0, x: x0, vx: 0, phase: rand() * 100,
+    ph: o.ph || [rand() * 6.283, rand() * 6.283, rand() * 6.283],
+    stopAt: o.stopAt ?? Infinity, speed: (2.5 + rand() * 4) * S, w: o.w ?? (3 + rand() * 3) * S, flow: o.flow ?? 1,
+    surges: [], front: -1, carving: false, stalled: false, burst: 0, joined: null, joins: [], pool: null, spill: null, orphan: !!o.orphan,
+  };
+}
+function spawnRivulet() {
+  const stopAt = rand() < 0.12 ? simH * (0.35 + rand() * 0.5) : Infinity;   // now and then the water runs out
+  rivulets.push(newRivulet(rand() * simW, -6, { stopAt }));
+}
+const streamWidth = (rv) => rv.w * (0.35 + 0.65 * Math.min(1, rv.flow));
+// Channel width along its length: smooth, irregular, fixed once the water has carved it.
+function channelWidth(rv, y) {
+  const [a, b, c] = rv.ph;
+  return 1 + 0.22 * Math.sin(y * 0.021 + a) + 0.13 * Math.sin(y * 0.053 + b) + 0.07 * Math.sin(y * 0.117 + c);
+}
+function addSurge(rv, y, extra = 0) {
+  rv.surges.push({
+    y, len: simH * (SURGE_LEN[0] + rand() * (SURGE_LEN[1] - SURGE_LEN[0])),
+    amp: SURGE_AMP[0] + rand() * (SURGE_AMP[1] - SURGE_AMP[0]) + extra, speed: (12 + rand() * 16) * S,
+  });
+}
+// A surge swells a stretch of the channel smoothly, peaking in its middle.
+function surgeAt(rv, y) {
+  let k = 1;
+  for (const sg of rv.surges) {
+    const u = (y - sg.y) / sg.len;
+    if (u > -0.5 && u < 0.5) k += sg.amp * Math.cos(u * Math.PI) ** 2;
+  }
+  return k;
+}
+// The channel point of stream o at height y, if it reaches that far.
+// Points run top to bottom (y never decreases), but are not evenly spaced where a stream bends
+// along a wiped edge, so look them up by height.
+function idxAtY(pts, y) {
+  let lo = 0, hi = pts.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (pts[m].y < y) lo = m + 1; else hi = m; }
+  return lo;
+}
+function pointAt(o, y) {
+  const q = o.pts[idxAtY(o.pts, y - 1.5)];
+  return q && Math.abs(q.y - y) <= 3 ? q : null;
+}
+// Extra width below each point where another stream has run into this one.
+function joinAdd(rv, y) {
+  let add = 0;
+  for (const j of rv.joins) if (y > j.y) add += j.add * Math.min(1, (y - j.y) / 24);
+  return add;
+}
+// Keep a stream's next point outside the fingers, hugging their outline on the side it chose.
+function aroundHand(rv, x, y, pad) {
+  for (let it = 0; it < 8; it++) {
+    let hit = null;
+    for (const c of handNow) {
+      const R = c.r + pad, dy = y - c.y;
+      if (Math.abs(dy) >= R) continue;
+      const half = Math.sqrt(R * R - dy * dy);
+      if (x > c.x - half && x < c.x + half) { hit = { c, half }; break; }
+    }
+    if (!hit) { if (it === 0) { rv.side = 0; rv.blockT = null; } return x; }
+    if (!rv.side) rv.side = x < hit.c.x ? -1 : 1;
+    x = hit.c.x + rv.side * (hit.half + 0.5);
+    rv.vx = rv.side * 0.3;
+  }
+  return x;
+}
+// Does drop d touch the water of the stream anywhere along its height?
+function touches(rv, d, reachY) {
+  const pts = rv.pts;
+  if (!pts.length || d.y + d.r < pts[0].y || d.y - d.r > reachY) return false;
+  const wd = streamWidth(rv);
+  for (let j = idxAtY(pts, d.y - d.r * 1.2); j < pts.length && pts[j].y <= d.y + d.r * 1.2; j++) {
+    const p = pts[j];
+    if (!p.on || p.y > reachY) continue;
+    const dx = d.x - p.x, dy = d.y - p.y, rr = d.r + wd * p.k;
+    if (dx * dx + dy * dy < rr * rr) return true;
+  }
+  return false;
+}
+// Water held at a wiped edge is a thin film lying along the edge just below it. Gravity pulls it
+// mostly toward the lower end of the edge, where it gathers a little thicker.
+// t = unit direction along the edge, pointing downhill; up/down = how far it reaches each way.
+function edgeFilm(cx, cy, up, down, th, ph, t) {
+  let nx = -t.y, ny = t.x;
+  if (ny < 0) { nx = -nx; ny = -ny; }
+  const L = up + down, ang = Math.atan2(t.x, -t.y);
+  const thick = (u) => {
+    const v = (u + up) / L;
+    return Math.max(0.4, th * Math.sqrt(Math.max(0, 1 - (2 * v - 1) ** 2)) * (0.7 + 0.5 * v) * (0.8 + 0.2 * Math.sin(u * 0.09 + ph[0]) * Math.sin(u * 0.041 + ph[1])));
+  };
+  const ox = cx + nx * th * 0.5, oy = cy + ny * th * 0.5;
+  for (let u = -up; u < down; u += 3) {
+    streams.push(ox + t.x * u, oy + t.y * u, thick(u), thick(u + 3), 3, ang, 0, (u === -up ? 1 : 0) | (u + 3 >= down ? 2 : 0));
+  }
+}
+// The wipe's direction where it cut a stream, turned to point downhill along the edge.
+function downhill(dir) {
+  let x = dir ? dir.x : 1, y = dir ? dir.y : 0;
+  if (y < 0 || (y === 0 && rand() < 0.5)) { x = -x; y = -y; }
+  y = Math.max(y, 0.08);
+  const l = Math.hypot(x, y);
+  return { x: x / l, y: y / l };
+}
+
+function stepRivulets(dt) {
+  clock += dt;
+  const { maxR } = radii();
+  const heavy = Math.max(0, (SL.rain - 0.7) / 0.3);   // streams only above 70% on the rainfall slider
+  const want = Math.round(heavy * 16 * Math.sqrt(simW * simH / (1280 * 800)));
+  if (rivulets.filter((r) => !r.orphan).length < want && rand() < 0.03 * dt) spawnRivulet();
+
+  for (let i = rivulets.length - 1; i >= 0; i--) {
+    const rv = rivulets[i], pts = rv.pts;
+    const lastY = pts.length ? pts[pts.length - 1].y : rv.y0;
+    const wd = streamWidth(rv);
+
+    // Between surges the channel thins to a wet track and waits for more water. It dries up only
+    // when the heavy rain stops, or when a wipe has cut it off from the water above.
+    const target = rv.orphan || heavy === 0 ? 0 : 0.4;
+    rv.flow += (target - rv.flow) * (rv.orphan ? 0.004 : 0.0015) * dt;
+    if (rv.flow < 0.05) {
+      for (let j = 0; j < pts.length; j += 2 + (rand() * 4 | 0)) {
+        if (!pts[j].on) continue;
+        smallDrop(pts[j].x + (rand() - 0.5) * 2, pts[j].y, (0.8 + rand() * 1.6) * S);
+      }
+      rivulets.splice(i, 1);
+      continue;
+    }
+    if (rv.spill) { rv.spill.t -= dt / 50; if (rv.spill.t <= 0) rv.spill = null; }
+
+    // Everything above the first wiped point is still fed from the top of the pane.
+    const f = rv.orphan ? -2 : pts.findIndex((p) => !p.on);
+    rv.front = f;
+    rv.carving = false;
+    rv.stalled = false;
+    rv.burst *= Math.pow(0.985, dt);
+    // a stream that ran into another feeds it until that channel is wiped or dries up
+    rv.joins = rv.joins.filter((j) => j.from.joined === rv && rivulets.includes(j.from));
+    if (rv.joined) {
+      const o = rv.joined, q = pointAt(o, lastY);
+      if (!rivulets.includes(o) || o.orphan || !q || !q.on || Math.abs(q.x - rv.x) > (streamWidth(o) + wd) * 1.6) rv.joined = null;
+    }
+    if (f === -1 && rv.joined) {
+      // nothing to carve: the water continues down the other channel
+    } else if (f === -1) {
+      if (lastY >= rv.stopAt && lastY < simH + 10) {
+        // Out of water partway down: the tip waits until the next surge arrives, then runs on quickly.
+        rv.stalled = true;
+        if (rv.surges.some((sg) => sg.y + sg.len * 0.5 >= lastY)) {
+          rv.stopAt = rand() < 0.6 ? Infinity : lastY + simH * (0.15 + rand() * 0.35);
+          rv.burst = 1; rv.stalled = false;
+        }
+      }
+      if (lastY < Math.min(rv.stopAt, simH + 10)) {
+        // the head meanders down in smooth, unhurried bends, carving the channel
+        rv.carving = true;
+        let adv = rv.speed * (1 + 2 * rv.burst) * dt * (0.4 + rand() * 1.2);
+        if (pts.length) adv *= 1 - 0.8 * wipeEdge(rv.x, pts[pts.length - 1].y + wd);
+        while (adv > 0) {
+          const y = (pts.length ? pts[pts.length - 1].y : rv.y0) + 3;
+          // a nearby channel draws the head toward it
+          let near = null, nd = Infinity;
+          for (const o of rivulets) {
+            if (o === rv || o.orphan) continue;
+            const q = pointAt(o, y);
+            if (q && q.on && Math.abs(q.x - rv.x) < nd) { nd = Math.abs(q.x - rv.x); near = { o, q }; }
+          }
+          rv.vx += (rand() - 0.5) * 0.22 * S;
+          if (near && nd < wd * 8) rv.vx += Math.sign(near.q.x - rv.x) * 0.12 * S;
+          rv.vx *= 0.96;
+          rv.vx = Math.max(-1.1, Math.min(1.1, rv.vx));
+          let x = rv.x + rv.vx;
+          if (handNow) {
+            if (!rv.side && underHand(x, y, wd)) {
+              // water meeting the fingers first gathers above them, then spills around one side
+              if (rv.blockT == null) rv.blockT = 40 + rand() * 90;
+              if (rv.blockT > 0) { rv.blockT -= dt; rv.stalled = true; rv.carving = false; break; }
+            }
+            x = aroundHand(rv, x, y, wd);
+          } else { rv.side = 0; rv.blockT = null; }
+          rv.x = x;
+          pts.push({ x: rv.x, y, k: channelWidth(rv, y), on: true });
+          eraseAt(rv.x, y, rv.w * 2.4);
+          adv -= 3;
+          if (near && Math.abs(near.q.x - rv.x) < (wd + streamWidth(near.o)) * 0.9) {
+            // touching: the two become one thicker stream from here down
+            rv.joined = near.o; rv.carving = false;
+            near.o.joins.push({ y, add: rv.w * 0.55, from: rv });
+            near.o.flow = Math.min(1.1, near.o.flow + 0.2);
+            break;
+          }
+        }
+      }
+    } else if (f >= 0) {
+      // Water arriving at a wiped edge clings to it and spreads sideways along the edge as a film.
+      if (!rv.pool || rv.pool.i !== f) {
+        const e = f > 0 ? pts[f - 1] : pts[0];
+        rv.pool = { i: f, x: e.x, y: e.y, t: 0, hold: 70 + rand() * 160, dir: downhill(rv.cutDir) };
+      }
+      const pl = rv.pool;
+      pl.t += dt * (0.5 + rv.flow);
+      const v = Math.min(1, pl.t / pl.hold);
+      const reach = wd * (1.5 + 7 * v);
+      pl.up = reach * 0.35; pl.down = reach * 1.4; pl.th = wd * (0.45 + 0.35 * v);
+      pl.half = (pl.up + pl.down) / 2;
+      if (pl.t > pl.hold) {
+        // Enough water has gathered for the tip to let go: it drops and carves a new path down.
+        // The stretch below the wipe is now cut off from the water and slowly dries.
+        const lower = pts.slice(f);
+        if (lower.some((p) => p.on)) {
+          const o = newRivulet(0, 0, { orphan: true, flow: rv.flow, w: rv.w, ph: rv.ph });
+          o.pts = lower; rivulets.push(o);
+        }
+        rv.pts = pts.slice(0, f);
+        // Water can't hang sideways along the edge: once it breaks through it falls straight down
+        // from where the stream met the edge, and the film along the edge drains into it.
+        rv.x = pl.x; rv.vx = 0; rv.burst = 0.6;
+        rv.stopAt = rand() < 0.12 ? pl.y + simH * (0.15 + rand() * 0.35) : Infinity;
+        if (!rv.pts.length) rv.y0 = pl.y - 3;
+        rv.spill = { x: pl.x, y: pl.y, up: pl.up, down: pl.down, th: pl.th, dir: pl.dir, t: 1 };
+        rv.pool = null;
+      }
+    }
+
+    // surges of water travel down the connected part of the channel
+    const reachY = f >= 0 ? (f > 0 ? rv.pts[f - 1].y : rv.y0) : lastY;
+    if (!rv.orphan && rand() < 0.012 * dt * (0.5 + heavy)) { addSurge(rv, rv.y0); rv.flow = Math.min(1.1, rv.flow + 0.3); }
+    for (const sg of rv.surges) sg.y += sg.speed * dt;
+    rv.surges = rv.surges.filter((sg) => {
+      if (sg.y - sg.len * 0.5 < Math.min(reachY, simH + 10)) return true;
+      if (rv.pool) rv.pool.t += 25;   // a surge reaching the wiped edge feeds the film
+      else if (rv.joined) { addSurge(rv.joined, reachY); rv.joined.flow = Math.min(1.1, rv.joined.flow + 0.2); }
+      return false;
+    });
+
+    // any drop that touches the water is pulled into the channel and runs down it as a surge
+    for (const d of drops) {
+      if (d.dead) continue;
+      if (touches(rv, d, reachY)) {
+        d.dead = true; addSurge(rv, d.y, Math.min(0.15, d.r / maxR * 0.12)); rv.flow = Math.min(1.1, rv.flow + 0.15);
+        continue;
+      }
+      const pl = rv.pool;
+      if (!pl || !pl.dir) continue;
+      const ex = d.x - pl.x, ey = d.y - pl.y, u = ex * pl.dir.x + ey * pl.dir.y;
+      if (u > -pl.up - d.r && u < pl.down + d.r && Math.abs(ey * pl.dir.x - ex * pl.dir.y) < d.r + pl.th * 1.5) {
+        d.dead = true; pl.t += d.r * 3;
+      }
+    }
+  }
+}
+
+// ---------- sound: drops knocking on the pane ----------
+let audio = null, soundOn = false, tapBudget = 0;
+function initAudio() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const sr = ctx.sampleRate, master = ctx.createGain();
+  master.gain.value = 0.9; master.connect(ctx.destination);
+  // Short, deep knocks — "dot, dot, dot" — the pane thudding as each drop hits: a soft attack,
+  // a low body tone with a touch of its overtone, and only a muffled hint of click.
+  const taps = [];
+  for (let v = 0; v < 12; v++) {
+    const len = (sr * 0.16) | 0, buf = ctx.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    const body = 85 + Math.random() * 95, over = body * (2.3 + Math.random() * 0.4);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / sr, attack = Math.min(1, t / 0.002);
+      lp += ((Math.random() * 2 - 1) - lp) * 0.06;
+      d[i] = attack * (
+        Math.sin(2 * Math.PI * body * t) * Math.exp(-t * 32) * 0.9
+        + Math.sin(2 * Math.PI * over * t) * Math.exp(-t * 70) * 0.18
+        + lp * Math.exp(-t * 380) * 0.5);
+    }
+    taps.push(buf);
+  }
+  // steady wash of rain behind the knocks
+  const nlen = sr * 2, nbuf = ctx.createBuffer(1, nlen, sr), nd = nbuf.getChannelData(0);
+  let b = 0;
+  for (let i = 0; i < nlen; i++) { b = 0.97 * b + (Math.random() * 2 - 1) * 0.15; nd[i] = b; }
+  const src = ctx.createBufferSource(); src.buffer = nbuf; src.loop = true;
+  const bp = ctx.createBiquadFilter(); bp.type = 'lowpass'; bp.frequency.value = 900;
+  const hiss = ctx.createGain(); hiss.gain.value = 0;
+  src.connect(bp); bp.connect(hiss); hiss.connect(master); src.start();
+  return { ctx, master, taps, hiss };
+}
+function playTap(x, size, gain) {
+  const { ctx, taps, master } = audio;
+  const s = ctx.createBufferSource(), g = ctx.createGain();
+  s.buffer = taps[(Math.random() * taps.length) | 0];
+  s.playbackRate.value = (1.15 - size * 0.45) * (0.9 + Math.random() * 0.2);   // bigger drops land lower
+  g.gain.value = gain;
+  let out = g;
+  if (ctx.createStereoPanner) { const pn = ctx.createStereoPanner(); pn.pan.value = (x / simW * 2 - 1) * 0.75; g.connect(pn); out = pn; }
+  s.connect(g); out.connect(master);
+  s.start(ctx.currentTime + Math.random() * 0.012);
+}
+function tap(x, size) {
+  if (!soundOn || tapBudget < 1) return;
+  tapBudget -= 1;
+  playTap(x, Math.max(0, Math.min(1, size)), 0.12 + size * 0.4);
+}
+function stepSound(dt) {
+  if (!audio) return;
+  tapBudget = Math.min(3, tapBudget + dt * 0.75);   // at most ~45 knocks a second
+  const rain = paused ? 0 : P.rain;
+  audio.hiss.gain.setTargetAtTime(soundOn ? 0.02 + rain * rain * 0.5 : 0, audio.ctx.currentTime, 0.3);
+  // rain striking the rest of the window, out of view
+  if (soundOn && !paused && rand() < rain * rain * 0.35 * dt) playTap(rand() * simW, rand() * 0.3, 0.03 + rand() * 0.05);
+}
+$('sound').addEventListener('click', () => {
+  if (!audio) audio = initAudio();
+  soundOn = !soundOn;
+  if (soundOn) audio.ctx.resume();
+  $('sound').textContent = soundOn ? 'Sound on' : 'Sound off';
+  $('sound').setAttribute('aria-pressed', String(soundOn));
+});
+
+// ---------- wiping with three fingers ----------
+// Index, middle and ring finger held together, pads and lower segments flat on the glass.
+// Hand frame: origin at the middle fingertip, +y toward the palm. The fingertips press firmly
+// and wipe clean; the lower segments press lightly and smear.
+let hand = null, stroke = null, lastPt = null, handA = 0, sway = 0;
+const pt = (e) => ({ x: e.clientX, y: e.clientY });
+const TIP = 0.42;   // share of the finger length that is firm fingertip pad
+
+function handGeom() {
+  const w = 40 * S, g = 5 * S, L = 2.3 * w;
+  const fingers = [{ x: -(w + g), tip: 0.3 * w }, { x: 0, tip: 0 }, { x: w + g, tip: 0.38 * w }];
+  const circles = [];
+  for (const f of fingers) {
+    for (let k = 0; k <= 7; k++) { const t = k / 7; circles.push({ x: f.x, y: f.tip + t * L, r: w * 0.5 * (1 - 0.18 * t), lower: t > TIP }); }
+  }
+  // Outer outline with outward normals; points facing into the gaps between fingers are skipped.
+  const inside = (x, y, skip) => circles.some((o) => o !== skip && Math.hypot(x - o.x, y - o.y) < o.r - 0.5);
+  const rim = [];
+  for (const c of circles) {
+    for (let a = 0; a < 36; a++) {
+      const th = a / 36 * Math.PI * 2, nx = Math.cos(th), ny = Math.sin(th);
+      const x = c.x + nx * c.r, y = c.y + ny * c.r;
+      if (inside(x, y, c) || inside(x + nx * 0.3 * w, y + ny * 0.3 * w, null)) continue;
+      rim.push({ x, y, nx, ny });
+    }
+  }
+  return { w, g, L, fingers, circles, rim };
+}
+
+// The forearm pivots at the elbow below the screen, so fingers lean left on the left side of the
+// pane and right on the right; sideways speed makes the fingertips trail behind the wrist.
+function aimHand(p, vx, snap) {
+  const target = Math.atan2(p.x - simW * 0.5, simH * 1.6 - p.y) * 1.15;
+  sway += (Math.max(-0.35, Math.min(0.35, -vx * 0.012)) - sway) * 0.2;
+  const next = snap ? target : handA + (target + sway - handA) * 0.35;
+  handA = Math.max(-1.1, Math.min(1.1, next));   // a wiping hand never turns sideways or down
+}
+
+function rimAt(ang) {
+  const c = Math.cos(ang), s = Math.sin(ang);
+  return hand.rim.map((p) => ({ x: c * p.x - s * p.y, y: s * p.x + c * p.y, nx: c * p.nx - s * p.ny, ny: s * p.nx + c * p.ny }));
+}
+// Outline on the leading side of the stroke, ordered across it.
+function frontEdge(ang) {
+  const ml = Math.hypot(stroke.mx, stroke.my);
+  const ux = ml > 0.2 ? stroke.mx / ml : Math.sin(ang), uy = ml > 0.2 ? stroke.my / ml : -Math.cos(ang);
+  const pts = rimAt(ang).filter((p) => p.nx * ux + p.ny * uy > 0.35);
+  pts.sort((p, q) => (p.y * ux - p.x * uy) - (q.y * ux - q.x * uy));
+  return pts;
+}
+// The swept-up water rides against the leading edge as one uneven strip: thicker where it pools,
+// thin and tapering at the ends, slowly shifting as it is pushed.
+function puddle() {
+  const edge = frontEdge(handA);
+  if (edge.length < 2) return [];
+  let L = 0;
+  for (let i = 1; i < edge.length; i++) L += Math.hypot(edge[i].x - edge[i - 1].x, edge[i].y - edge[i - 1].y);
+  const tAvg = Math.max(1.2 * S, Math.min(hand.w * 0.4, Math.sqrt(stroke.water / (Math.max(L, 1) * 1.4))));
+  const [p1, p2, p3] = stroke.ph;
+  let s = 0;
+  const sm = edge.map((_, i) => {
+    let x = 0, y = 0, nx = 0, ny = 0, n = 0;
+    for (let k = Math.max(0, i - 5); k <= Math.min(edge.length - 1, i + 5); k++) { x += edge[k].x; y += edge[k].y; nx += edge[k].nx; ny += edge[k].ny; n++; }
+    const nl = Math.hypot(nx, ny) || 1;
+    return { x: x / n, y: y / n, nx: nx / nl, ny: ny / nl };
+  });
+  return sm.map((e, i) => {
+    if (i) s += Math.hypot(e.x - sm[i - 1].x, e.y - sm[i - 1].y);
+    const u = s / Math.max(L, 1);
+    const n = 0.62 + 0.24 * Math.sin(s * 0.07 + p1 + clock * 0.05) + 0.16 * Math.sin(s * 0.19 + p2 - clock * 0.09) + 0.1 * Math.sin(s * 0.43 + p3);
+    const taper = Math.sqrt(Math.max(0, Math.min(1, u / 0.12, (1 - u) / 0.12)));
+    const t = tAvg * n * (0.35 + 0.65 * taper);
+    return { x: lastPt.x + e.x + e.nx * t * 0.6, y: lastPt.y + e.y + e.ny * t * 0.6, t };
+  });
+}
+
+// The fingertips do the wiping. The lower fingers mostly just brush the glass, leaving a faint,
+// mottled smear; now and then they press harder for a stretch of the stroke (stroke.lowP).
+function stampHand(x, y, ang, press) {
+  const lowP = press ? 0.25 : stroke.lowP, sm = Math.max(0, Math.min(1, 1 - lowP));
+  const c = Math.cos(ang), s = Math.sin(ang), { w, L } = hand;
+  const rTip = w * 0.5, rMid = w * 0.5 * (1 - 0.18 * TIP), rBase = w * 0.5 * 0.82;
+  for (const f of hand.fingers) {
+    let lx = f.x, ly = f.tip + TIP * L;
+    wipes.push(x + c * lx - s * ly, y + s * lx + c * ly, rMid, rTip, TIP * L, ang, 1, 0);
+    ly = f.tip + L;
+    wipes.push(x + c * lx - s * ly, y + s * lx + c * ly, rBase, rMid, (1 - TIP) * L, ang, lowP, 1 + sm);
+  }
+  for (const k of hand.circles) markWiped(x + c * k.x - s * k.y, y + s * k.x + c * k.y, k.r, k.lower ? lowP : 1);
+}
+
+function sweep(a, b, a0, a1) {
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+  const pl = Math.hypot(stroke.mx, stroke.my), pmx = pl > 0.2 ? stroke.mx / pl : 0, pmy = pl > 0.2 ? stroke.my / pl : 0;
+  if (len > 0.5) {
+    const k = Math.min(1, len / 40);
+    stroke.mx += (dx / len - stroke.mx) * k; stroke.my += (dy / len - stroke.my) * k;
+  }
+  const { minR, maxR } = radii();
+  const ml = Math.hypot(stroke.mx, stroke.my) || 1, mx = stroke.mx / ml, my = stroke.my / ml, nx = -my, ny = mx;
+  const steps = Math.max(1, Math.ceil(Math.max(len, Math.abs(a1 - a0) * hand.L) / (hand.w * 0.25))), stepLen = len / steps;
+  const reach = hand.L + hand.w * 2;
+
+  for (let st = 1; st <= steps; st++) {
+    const t = st / steps, x = a.x + dx * t, y = a.y + dy * t, ang = a0 + (a1 - a0) * t;
+    const c = Math.cos(ang), s = Math.sin(ang);
+    stroke.dist += stepLen;
+    stroke.lowTimer -= stepLen;
+    if (stroke.lowTimer <= 0) {
+      stroke.lowT = rand() < 0.25 ? 0.45 + rand() * 0.25 : 0.06 + rand() * 0.1;
+      stroke.lowTimer = hand.w * (2 + rand() * 4);
+    }
+    if (stepLen > 0) stroke.lowP += (stroke.lowT - stroke.lowP) * 0.08;
+    stampHand(x, y, ang, len <= 0.5);
+
+    // drops under the pads are swept into the strip; the lower fingers only take part of them
+    for (const d of drops) {
+      if (d.dead) continue;
+      const wx = d.x - x, wy = d.y - y;
+      if (Math.abs(wx) > reach || Math.abs(wy) > reach) continue;
+      const qx = c * wx + s * wy, qy = -s * wx + c * wy;
+      for (const cc of hand.circles) {
+        const ex = qx - cc.x, ey = qy - cc.y, rr = cc.r + d.r * 0.3;
+        if (ex * ex + ey * ey >= rr * rr) continue;
+        if (!cc.lower) { stroke.water += d.r ** 3; d.dead = true; }
+        else {
+          const v = d.r ** 3 * (0.2 + 0.7 * stroke.lowP);
+          stroke.water += v; d.r = Math.cbrt(d.r ** 3 - v);
+          if (d.r < minR) { stroke.water += d.r ** 3; d.dead = true; }
+        }
+        break;
+      }
+    }
+    // streams under the fingers are wiped too; the water above keeps its track
+    for (const rv of rivulets) {
+      for (const q of rv.pts) {
+        if (!q.on) continue;
+        const wx = q.x - x, wy = q.y - y;
+        if (Math.abs(wx) > reach || Math.abs(wy) > reach) continue;
+        const qx = c * wx + s * wy, qy = -s * wx + c * wy;
+        for (const cc of hand.circles) {
+          const ex = qx - cc.x, ey = qy - cc.y;
+          if (ex * ex + ey * ey < cc.r * cc.r) {
+            q.on = false; stroke.water += (rv.w * q.k) ** 2 * 1.8;
+            rv.cutDir = Math.hypot(stroke.mx, stroke.my) > 0.2 ? { x: mx, y: my } : null;
+            break;
+          }
+        }
+      }
+    }
+    if (len <= 0.5) { stroke.water = Math.min(stroke.water, maxR ** 3); continue; }
+
+    let ePos = -Infinity, eNeg = Infinity;
+    for (const cc of hand.circles) {
+      const q = (c * cc.x - s * cc.y) * nx + (s * cc.x + c * cc.y) * ny;
+      ePos = Math.max(ePos, q + cc.r); eNeg = Math.min(eNeg, q - cc.r);
+    }
+    // so is the film of mist and fog
+    stroke.water += stepLen * (ePos - eNeg) * (0.15 + 0.6 * P.mist) * S;
+
+    // the strip never holds more than one large natural drop; the rest smears off the sides as film
+    if (stroke.water > maxR ** 3) {
+      stroke.water = maxR ** 3;
+      for (const [side, sg] of [[ePos, 1], [eNeg, -1]]) {
+        if (rand() > 0.3) continue;
+        const rr = (0.8 + rand() * 1.6) * S, o = side + sg * rr * (0.5 + rand()), back = -rand() * hand.w * 0.5;
+        smallDrop(x + nx * o + mx * back, y + ny * o + my * back, rr);
+      }
+    }
+  }
+
+  // Changing direction mid-wipe leaves a small, thin puddle lying along the wipe line, mostly on
+  // the outside of the turn where the fingers' edge sweeps fastest.
+  if (len > 0.5 && pl > 0.2) {
+    const ux = dx / len, uy = dy / len;
+    const turn = Math.acos(Math.max(-1, Math.min(1, pmx * ux + pmy * uy)));
+    let n = Math.min(2, Math.floor(turn * 6 + rand()));
+    if (n > 0) {
+      const c = Math.cos(a1), s = Math.sin(a1);
+      let ePos = -Infinity, eNeg = Infinity;
+      for (const cc of hand.circles) {
+        const q = (c * cc.x - s * cc.y) * nx + (s * cc.x + c * cc.y) * ny;
+        ePos = Math.max(ePos, q + cc.r); eNeg = Math.min(eNeg, q - cc.r);
+      }
+      const outer = pmx * uy - pmy * ux > 0 ? -1 : 1;
+      while (n-- > 0) {
+        const sg = rand() < 0.75 ? outer : -outer, th = (0.9 + rand() * 0.9) * S;
+        const L = (8 + rand() * 22) * S * Math.min(1.5, 0.6 + turn), o = (sg > 0 ? ePos : eNeg) + sg * th * 0.7, t = rand();
+        const cx = a.x + dx * t + nx * o, cy = a.y + dy * t + ny * o;
+        // one uneven, slightly wobbly sliver along the edge, a little fuller at one end
+        const f = rand() < 0.5 ? 1 : -1, sx = cx - ux * L * 0.5 * f, sy = cy - uy * L * 0.5 * f;
+        beads.push(sx, sy, th * (0.7 + rand() * 0.3), th * (1 + rand() * 0.4), L, Math.atan2(ux * f, -uy * f), 0.12, rand() * 6.283);
+      }
+    }
+  }
+}
+
+// Lifting the fingers leaves the strip behind. It breaks where it is thickest into mid to large
+// drops whose combined volume is at most one large natural drop; the heaviest may start to run.
+function release() {
+  if (!stroke) return;
+  const { minR, maxR } = radii(), rSlide = minR + (maxR - minR) * 0.42;
+  const band = stroke.water > 0 ? puddle() : [];
+  const vol = band.map((p, i) => (i ? p.t * p.t * Math.hypot(p.x - band[i - 1].x, p.y - band[i - 1].y) : 0));
+  const total = vol.reduce((x, y) => x + y, 0);
+  if (total > 0) {
+    const k = stroke.water / total, target = () => (maxR * (0.3 + rand() * 0.6)) ** 3;
+    let acc = 0, ax = 0, ay = 0, want = target();
+    for (let i = 0; i < band.length; i++) {
+      const v = vol[i] * k;
+      acc += v; ax += band[i].x * v; ay += band[i].y * v;
+      if (acc < want && i < band.length - 1) continue;
+      if (acc > (minR * 1.2) ** 3) {
+        const d = addDrop(ax / acc + (rand() - 0.5) * 3, ay / acc + (rand() - 0.5) * 3, Math.min(maxR, Math.cbrt(acc)), { spread: 0.3, stick: 0.6 });
+        if (d && !d.moving && d.r > rSlide && rand() < 0.4) { d.moving = true; d.vy = 0.05; d.trailY = d.y; d.gap = d.r; }
+      } else if (acc > 0) smallDrop(ax / acc, ay / acc, Math.max(0.8 * S, Math.cbrt(acc)));
+      acc = ax = ay = 0; want = target();
+    }
+    // a thin film of fine beads stays where the strip lay
+    for (let i = 0; i < band.length; i += 2) {
+      if (rand() < 0.3) smallDrop(band[i].x + (rand() - 0.5) * band[i].t, band[i].y + (rand() - 0.5) * band[i].t, (0.8 + rand() * 1.2) * S);
+    }
+  }
+  stroke = null;
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  lastPt = pt(e); aimHand(lastPt, 0, true); sway = 0;
+  stroke = { mx: 0, my: 0, water: 0, dist: 0, lowP: 0.1, lowT: 0.1, lowTimer: 0, ph: [rand() * 6.283, rand() * 6.283, rand() * 6.283] };
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+  sweep(lastPt, lastPt, handA, handA);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!stroke) return;
+  const p = pt(e), a0 = handA;
+  aimHand(p, p.x - lastPt.x, false);
+  sweep(lastPt, p, a0, handA);
+  lastPt = p;
+});
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+$('wipe').addEventListener('click', () => { for (const d of drops) d.dead = true; clearTarget(D, [0, 0, 0, 0]); wg.fill(0); });
+let paused = false;
+$('pause').addEventListener('click', () => { paused = !paused; $('pause').textContent = paused ? 'Resume' : 'Pause'; });
+
+// ---------- render passes ----------
+let fogAcc = 0;
+function passMist(dt) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, D.fb); gl.viewport(0, 0, D.w, D.h);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE); drawBlobs(droplets, 0, 0.35);
+  gl.blendFunc(gl.ZERO, gl.ONE_MINUS_SRC_ALPHA); drawBlobs(erase, 1, 0.05); drawBlobs(wipes, 2, 0.05);
+  gl.blendFunc(gl.ONE, gl.ONE); drawBlobs(beads, 0, 0.35);   // trail beads land after the wipe
+  fogAcc += dt;
+  if (fogAcc >= 6) {
+    const k = fogAcc; fogAcc = 0;
+    gl.colorMask(false, false, true, false);           // glass slowly fogs back over
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    drawFill(0, 0, 1, 1 - Math.pow(1 - condenseRate(), k));
+    gl.colorMask(true, true, false, false);            // mist evaporates
+    gl.blendFunc(gl.ZERO, gl.SRC_ALPHA);
+    drawFill(0, 0, 0, Math.pow(0.9993, k));
+    gl.colorMask(true, true, true, true);
+  }
+  gl.disable(gl.BLEND);
+  droplets.n = 0; erase.n = 0; wipes.n = 0; beads.n = 0;
+}
+function passWater() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, W.fb); gl.viewport(0, 0, W.w, W.h);
+  gl.useProgram(copy.p);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, D.tex);
+  gl.uniform1i(copy.u.uTex, 0);
+  gl.bindVertexArray(vaoQuad); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  buildDropQuads();
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  drawBlobs(dropQuads, 0, 0.35);
+  gl.blendEquationSeparate(gl.MAX, gl.FUNC_ADD);
+  drawBlobs(streams, 3, 0.35);
+  gl.blendEquation(gl.FUNC_ADD);
+  gl.disable(gl.BLEND);
+  dropQuads.n = 0; streams.n = 0;
+}
+function passFinal() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(fin.p);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, W.tex);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, D.tex);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, bgTex);
+  const u = fin.u;
+  gl.uniform1i(u.uWater, 0); gl.uniform1i(u.uMist, 1); gl.uniform1i(u.uBg, 2);
+  gl.uniform2f(u.uTexel, 1 / W.w, 1 / W.h);
+  const A = simW / simH, B = bgW / bgH;
+  if (A > B) gl.uniform2f(u.uBgScale, 1, B / A); else gl.uniform2f(u.uBgScale, A / B, 1);
+  gl.uniform2f(u.uBgSize, bgW, bgH);
+  gl.uniform1f(u.uAspect, simH / simW);
+  gl.uniform1f(u.uRefract, 0.04 + P.refract * 0.26);
+  gl.uniform1f(u.uFog, P.fog);
+  gl.uniform1f(u.uLod, 4.5 + P.fog * 3.0);
+  gl.bindVertexArray(vaoQuad); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// ---------- start with a pane that has already been in the rain ----------
+resize();
+(() => {
+  const { minR, maxR } = radii(), area = simW * simH / (1280 * 800);
+  for (let i = 0; i < 160 * area; i++) addDrop(rand() * simW, rand() * simH, minR + (maxR * 0.8 - minR) * Math.pow(rand(), 2));
+  for (let i = 0; i < 6000 * area * P.mist; i++) bead(droplets, rand() * simW, rand() * simH, (0.6 + rand() * rand() * 1.9) * S, 0.12);
+  for (let i = 0; i < 300; i++) { step(1); passMist(1); }
+})();
+
+let resizeT = 0;
+addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(resize, 120); });
+
+let last = performance.now(), statT = 0;
+function frame(now) {
+  const dt = Math.min(Math.max((now - last) / 16.667, 0.2), 3) * (reduced ? 0.6 : 1);
+  last = now;
+  if (!paused) step(dt);
+  stepSound(dt);
+  passMist(paused ? 0 : dt);
+  passWater();
+  passFinal();
+  if (now - statT > 400) {
+    statT = now;
+    let moving = 0; for (const d of drops) if (d.moving) moving++;
+    $('stat').textContent = `${drops.length} drops · ${moving} running`;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
