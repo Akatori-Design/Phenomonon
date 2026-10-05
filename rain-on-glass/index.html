@@ -928,6 +928,13 @@ function buildDropQuads() {
       edgeFilm(sp.x, sp.y, sp.up * sp.t, sp.down * (0.5 + 0.5 * sp.t), sp.th * sp.t, rv.ph, sp.dir);
     }
   }
+  if (stroke && stroke.hang > (0.8 * S) ** 3 && lastPt) {
+    const low = lowestFront(handA);
+    if (low) {
+      const r = Math.cbrt(stroke.hang), sag = 0.4 + 0.5 * Math.min(1, stroke.hang / hangLimit());   // stretches as it gets heavier
+      dropQuads.push(lastPt.x + low.x, lastPt.y + low.y + r * (0.6 + 0.4 * sag), r, r * (0.6 - 0.15 * sag), r * (0.5 + sag), 0, 0.05, stroke.ph[1]);
+    }
+  }
   if (stroke && stroke.water > 0) {
     const band = puddle();
     for (let i = 0; i + 1 < band.length; i++) {
@@ -1407,6 +1414,13 @@ function puddle() {
 
 // The fingertips do the wiping. The lower fingers mostly just brush the glass, leaving a faint,
 // mottled smear; now and then they press harder for a stretch of the stroke (stroke.lowP).
+// how much water can hang from the fingers before its weight pulls it off
+const hangLimit = () => (holdR() * 2.45) ** 3;
+function lowestFront(ang) {
+  let low = null;
+  for (const p of frontEdge(ang)) if (!low || p.y > low.y) low = p;
+  return low;
+}
 function stampHand(x, y, ang, press) {
   const lowP = press ? 0.25 : stroke.lowP, sm = Math.max(0, Math.min(1, 1 - lowP));
   const c = Math.cos(ang), s = Math.sin(ang), { w, L } = hand;
@@ -1443,6 +1457,7 @@ function sweep(a, b, a0, a1) {
     }
     if (stepLen > 0) stroke.lowP += (stroke.lowT - stroke.lowP) * 0.08;
     stampHand(x, y, ang, len <= 0.5);
+    const w0 = stroke.water;
 
     // drops under the pads are swept into the strip; the lower fingers only take part of them
     for (const d of drops) {
@@ -1488,6 +1503,9 @@ function sweep(a, b, a0, a1) {
     }
     // so is the film of mist and fog
     stroke.water += stepLen * (ePos - eNeg) * (0.15 + 0.6 * P.mist) * S;
+    // part of what the fingers gather runs down the pushing edge to its lowest point
+    const gained = stroke.water - w0;
+    if (gained > 0) { stroke.water -= gained * 0.25; stroke.hang += gained * 0.25; }
 
     // the strip never holds more than one large natural drop; the rest smears off the sides as film
     if (stroke.water > maxR ** 3) {
@@ -1498,26 +1516,22 @@ function sweep(a, b, a0, a1) {
         smallDrop(x + nx * o + mx * back, y + ny * o + my * back, rr);
       }
     }
-    // A long wipe (past ~40% of the pane's width) gathers more than the fingers can hold against
-    // the glass. Once per stroke, it lets go from the lowest point of the pushing edge: one large
-    // drop that runs down, or now and then a stream.
-    const hr = holdR();
-    if (!stroke.dripped && stroke.dist > simW * 0.4 && stroke.water > hr ** 3 * 0.8) {
-      let low = null;
-      for (const p of frontEdge(ang)) if (!low || p.y > low.y) low = p;
+    // The water at the bottom of the fingers hangs there, held by viscosity, growing as more
+    // runs down. Once it is heavy enough to beat that hold it lets go and falls, usually as one
+    // large drop, sometimes opening a stream.
+    if (stroke.hang > hangLimit()) {
+      const low = lowestFront(ang);
       if (low) {
-        stroke.dripped = true;
-        const bx = x + low.x, by = y + low.y + hand.w * 0.15;
-        if (rand() < 0.35 && rivulets.length < 30) {
-          const rv = newRivulet(bx, by, { w: Math.min(6 * S, hr * 0.45), flow: 1, stopAt: by + simH * (0.25 + rand() * 0.5) });
+        const r0 = Math.cbrt(stroke.hang), bx = x + low.x, by = y + low.y + r0 * 0.9;
+        if (rand() < 0.25 && rivulets.length < 30) {
+          const rv = newRivulet(bx, by, { w: Math.min(6 * S, r0 * 0.4), flow: 1, stopAt: by + simH * (0.25 + rand() * 0.5) });
           rv.burst = 1;
           rivulets.push(rv);
         } else {
-          const rr = hr * (1.3 + rand() * 0.3);
-          const dd = addDrop(bx + low.nx * rr * 1.2, by + rr, rr, { stick: 1 });
+          const dd = addDrop(bx, by, r0, { stick: 1 });
           if (dd) { dd.moving = true; dd.vy = Math.max(dd.vy, 1.5 * S); dd.trailY = dd.y; dd.gap = dd.r * 2; }
         }
-        stroke.water *= 0.3;
+        stroke.hang = 0;
       }
     }
   }
@@ -1553,6 +1567,11 @@ function sweep(a, b, a0, a1) {
 function release() {
   if (!stroke) return;
   const { minR, maxR } = radii(), rSlide = holdR();
+  if (stroke.hang > (0.8 * S) ** 3 && lastPt) {
+    const low = lowestFront(handA), r0 = Math.cbrt(stroke.hang);
+    if (low) addDrop(lastPt.x + low.x, lastPt.y + low.y + r0 * 0.9, r0, { stick: 1 });
+    stroke.hang = 0;
+  }
   const band = stroke.water > 0 ? puddle() : [];
   const vol = band.map((p, i) => (i ? p.t * p.t * Math.hypot(p.x - band[i - 1].x, p.y - band[i - 1].y) : 0));
   const total = vol.reduce((x, y) => x + y, 0);
@@ -1579,7 +1598,7 @@ function release() {
 
 canvas.addEventListener('pointerdown', (e) => {
   lastPt = pt(e); aimHand(lastPt, 0, true); sway = 0;
-  stroke = { mx: 0, my: 0, water: 0, dist: 0, dripped: false, lowP: 0.1, lowT: 0.1, lowTimer: 0, ph: [rand() * 6.283, rand() * 6.283, rand() * 6.283] };
+  stroke = { mx: 0, my: 0, water: 0, hang: 0, dist: 0, lowP: 0.1, lowT: 0.1, lowTimer: 0, ph: [rand() * 6.283, rand() * 6.283, rand() * 6.283] };
   try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   sweep(lastPt, lastPt, handA, handA);
 });
