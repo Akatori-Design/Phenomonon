@@ -708,10 +708,13 @@ function step(dt) {
       }
     } else {
       const px = d.x, py = d.y;
-      const m = Math.min(1.5, d.r / maxR);
-      d.vy += 0.05 * m * S * dt * (0.5 + rand());
-      if (rand() < 0.015 * dt) d.vy *= 0.1 + rand() * 0.4; // snags on dirt and dry glass
+      // Weight grows faster than the grip on the glass, so bigger drops run much faster and
+      // snag less: a heavy drop streaks down, a small one wanders and stalls.
+      const m = Math.min(4, (d.r / maxR) ** 1.8);
+      d.vy += 0.06 * m * S * dt * (0.5 + rand());
+      if (rand() < 0.015 * dt * Math.min(1.5, rSlide / d.r)) d.vy *= 0.1 + rand() * 0.4; // snags on dirt and dry glass
       d.vy *= Math.pow(0.982, dt);
+      d.vy = Math.min(d.vy, 14 * S);
       d.vx += (rand() - 0.5) * 0.35 * S * dt;
       d.vx *= Math.pow(0.86, dt);
       // At a wipe line the drop's front meets the ridge of film and stops. It settles along the
