@@ -4,7 +4,7 @@ A WebGL2 simulation of rain on a window, in one HTML file with no dependencies.
 
 ## What it does
 
-- **Drops** land at random, sag under their own weight, and merge into one drop holding their combined volume when they touch. Heavy drops break free and run down as one U-shaped body, losing water as they go, and small ones come to rest when they run out.
+- **Drops** land at random, sag under their own weight, and merge into one drop holding their combined volume when they come within a pixel. Small and mid-size drops stay put; a drop slides only once it holds more water than the glass can carry, then runs down as one U-shaped body at a speed proportional to its volume, losing water as it goes until it comes to rest.
 - **Refraction**: every drop and stream acts as a small lens showing an inverted view of the street, with dark rims and soft highlights.
 - **Condensation** fogs the glass; running water clears channels through it, and it slowly forms back.
 - **Streams** pour from the top of the pane only above 70% rainfall; at any rainfall, a running drop that gathers enough water opens a stream of its own. Streams meander down, carry surges of water, merge with each other, absorb drops they touch, and thin out and dry when no more water reaches them.
