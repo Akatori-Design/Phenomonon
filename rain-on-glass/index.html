@@ -522,23 +522,53 @@ function setBackground(src, w = src.width, h = src.height) {
 }
 setBackground(paintDusk());
 
-// A video behind the glass: its current frame is uploaded as the background whenever it changes.
-let bgVideo = null, bgVideoT = -1;
+// A video behind the glass. Two copies of the clip play in turn: as one nears its end the other
+// starts from the beginning and the two crossfade, so the loop has no visible jump. The mix is
+// drawn into a canvas, which becomes the background texture.
+let vid = null;
 function stopVideo() {
-  if (!bgVideo) return;
-  bgVideo.pause(); URL.revokeObjectURL(bgVideo.src); bgVideo = null;
+  if (!vid) return;
+  for (const v of vid.players) v.pause();
+  URL.revokeObjectURL(vid.url); vid = null;
 }
 function useVideo(file) {
   stopVideo();
-  const v = document.createElement('video');
-  v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
-  v.src = URL.createObjectURL(file);
-  v.addEventListener('loadeddata', () => { bgVideo = v; bgVideoT = -1; v.play().catch(() => {}); }, { once: true });
+  const url = URL.createObjectURL(file);
+  const make = () => {
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+    return v;
+  };
+  const a = make(), b = make();
+  a.addEventListener('loadeddata', () => {
+    const k = Math.min(1, 1280 / a.videoWidth);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(a.videoWidth * k)); c.height = Math.max(1, Math.round(a.videoHeight * k));
+    vid = { url, players: [a, b], cur: 0, fading: false, canvas: c, ctx: c.getContext('2d'), lastT: -1 };
+    a.play().catch(() => {});
+  }, { once: true });
 }
 function updateVideo() {
-  if (!bgVideo || bgVideo.readyState < 2 || bgVideo.currentTime === bgVideoT) return;
-  bgVideoT = bgVideo.currentTime;
-  setBackground(bgVideo, bgVideo.videoWidth, bgVideo.videoHeight);
+  if (!vid) return;
+  const cur = vid.players[vid.cur], next = vid.players[1 - vid.cur];
+  if (cur.readyState < 2 || !cur.duration) return;
+  const fade = Math.min(1.5, cur.duration * 0.25), start = cur.duration - fade;
+  if (!vid.fading && cur.currentTime >= start) {
+    vid.fading = true; next.currentTime = 0; next.play().catch(() => {});
+  }
+  let t = vid.fading ? Math.min(1, (cur.currentTime - start) / fade) : 0;
+  if (cur.ended) t = 1;
+  t = t * t * (3 - 2 * t);
+  if (cur.currentTime === vid.lastT && !vid.fading) return;
+  vid.lastT = cur.currentTime;
+  const { ctx, canvas: c } = vid;
+  ctx.globalAlpha = 1;
+  ctx.drawImage(cur, 0, 0, c.width, c.height);
+  if (vid.fading && next.readyState >= 2) { ctx.globalAlpha = t; ctx.drawImage(next, 0, 0, c.width, c.height); }
+  setBackground(c);
+  if (vid.fading && t >= 1) {   // hand over to the copy that is now playing
+    cur.pause(); vid.cur = 1 - vid.cur; vid.fading = false;
+  }
 }
 $('scene').addEventListener('change', (e) => { stopVideo(); setBackground(scenes[e.target.value]()); });
 
