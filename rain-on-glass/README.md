@@ -15,7 +15,7 @@ A WebGL2 simulation of rain on a window, in one HTML file with no dependencies.
 
 ## Controls
 
-Rainfall, drop size, condensation, refraction and fog sliders (50% is the tuned default), a choice of view outside, wipe glass, pause, sound, and "Use a photo" to look through your own image (or drop one onto the page).
+Rainfall, drop size, condensation, refraction and fog sliders (50% is the tuned default), a choice of view outside, wipe glass, pause, sound, and "Use a photo or video" to look through your own image or video clip (or drop one onto the page).
 
 ## Run it
 

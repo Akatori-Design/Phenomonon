@@ -78,10 +78,10 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
       <button id="wipe" type="button">Wipe glass</button>
       <button id="pause" type="button">Pause</button>
       <button id="sound" type="button" aria-pressed="true">Mute sound</button>
-      <label class="file" for="photo">Use a photo</label>
-      <input class="sr" type="file" id="photo" accept="image/*">
+      <label class="file" for="photo">Use a photo or video</label>
+      <input class="sr" type="file" id="photo" accept="image/*,video/*">
     </div>
-    <p class="note">Drag across the glass to wipe it as if with three fingers. Above 70% rainfall, streams start running down the pane. Drop an image anywhere to look through it.</p>
+    <p class="note">Drag across the glass to wipe it as if with three fingers. Above 70% rainfall, streams start running down the pane. Drop a photo or video anywhere to look through it.</p>
   </div>
 </details>
 
@@ -508,7 +508,7 @@ function paintDusk() {
 const scenes = { dusk: paintDusk, night: paintCity };
 const bgTex = gl.createTexture();
 let bgW = 1, bgH = 1;
-function setBackground(src) {
+function setBackground(src, w = src.width, h = src.height) {
   gl.bindTexture(gl.TEXTURE_2D, bgTex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
@@ -518,13 +518,34 @@ function setBackground(src) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
-  bgW = src.width; bgH = src.height;
+  bgW = w; bgH = h;
 }
 setBackground(paintDusk());
-$('scene').addEventListener('change', (e) => setBackground(scenes[e.target.value]()));
+
+// A video behind the glass: its current frame is uploaded as the background whenever it changes.
+let bgVideo = null, bgVideoT = -1;
+function stopVideo() {
+  if (!bgVideo) return;
+  bgVideo.pause(); URL.revokeObjectURL(bgVideo.src); bgVideo = null;
+}
+function useVideo(file) {
+  stopVideo();
+  const v = document.createElement('video');
+  v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
+  v.src = URL.createObjectURL(file);
+  v.addEventListener('loadeddata', () => { bgVideo = v; bgVideoT = -1; v.play().catch(() => {}); }, { once: true });
+}
+function updateVideo() {
+  if (!bgVideo || bgVideo.readyState < 2 || bgVideo.currentTime === bgVideoT) return;
+  bgVideoT = bgVideo.currentTime;
+  setBackground(bgVideo, bgVideo.videoWidth, bgVideo.videoHeight);
+}
+$('scene').addEventListener('change', (e) => { stopVideo(); setBackground(scenes[e.target.value]()); });
 
 async function loadPhoto(file) {
+  if (file && file.type.startsWith('video/')) { useVideo(file); return; }
   if (!file || !file.type.startsWith('image/')) return;
+  stopVideo();
   const bmp = await createImageBitmap(file);
   const k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas');
@@ -1663,13 +1684,18 @@ function passFinal() {
 }
 
 // ---------- start with a pane that has already been in the rain ----------
-resize();
-(() => {
+// (deferred until the page has a real size; a frame can start out 0 x 0)
+let warmed = false;
+function prewarm() {
+  if (warmed || innerWidth < 2 || innerHeight < 2) return;
+  warmed = true;
   const { minR, maxR } = radii(), area = simW * simH / (1280 * 800);
   for (let i = 0; i < 160 * area; i++) addDrop(rand() * simW, rand() * simH, minR + (maxR * 0.8 - minR) * Math.pow(rand(), 2));
   for (let i = 0; i < 6000 * area * P.mist; i++) bead(droplets, rand() * simW, rand() * simH, (0.6 + rand() * rand() * 1.9) * S, 0.12);
   for (let i = 0; i < 300; i++) { step(1); passMist(1); }
-})();
+}
+resize();
+prewarm();
 
 let resizeT = 0;
 addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(resize, 120); });
@@ -1679,10 +1705,12 @@ function frame(now) {
   const dt = Math.min(Math.max((now - last) / 16.667, 0.2), 3) * (reduced ? 0.6 : 1);
   last = now;
   if (innerWidth > 0 && innerHeight > 0 && (Math.round(innerWidth) !== simW || Math.round(innerHeight) !== simH)) resize();
+  if (!warmed) prewarm();
   if (!paused) step(dt);
   stepSound(dt);
   passMist(paused ? 0 : dt);
   passWater();
+  updateVideo();
   passFinal();
   if (now - statT > 400) {
     statT = now;
