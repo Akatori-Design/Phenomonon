@@ -967,10 +967,21 @@ function buildDropQuads() {
   }
   for (const rv of rivulets) {
     const pts = rv.pts, wd = streamWidth(rv);
+    // Water keeps draining down the channel, so a stream is thin near its top and fuller lower
+    // down. Once the supply from above slows, the top thins further and fades away from the top.
+    const y0 = pts.length ? pts[0].y : 0, span = Math.max(1, (pts.length ? pts[pts.length - 1].y : 0) - y0);
+    const dryFront = Math.min(1, Math.max(0, (0.6 - rv.flow) / 0.6)) * 0.85;
+    const profile = (y) => {
+      const u = Math.min(1, Math.max(0, (y - y0) / span));
+      const sh = 0.45 + 0.8 * Math.pow(u, 0.8);
+      return dryFront > 0 ? sh * Math.min(1, Math.max(0, (u - dryFront + 0.15) / 0.2)) : sh;
+    };
     for (let j = 1; j < pts.length; j++) {
       const a = pts[j - 1], b = pts[j];
       if (!a.on || !b.on) continue;
-      const ra = (wd * a.k + joinAdd(rv, a.y)) * surgeAt(rv, a.y), rb = (wd * b.k + joinAdd(rv, b.y)) * surgeAt(rv, b.y);
+      const pa = profile(a.y), pb = profile(b.y);
+      if (pa < 0.08 && pb < 0.08) continue;   // this stretch has drained dry
+      const ra = Math.max(0.3, (wd * a.k + joinAdd(rv, a.y)) * surgeAt(rv, a.y) * pa), rb = Math.max(0.3, (wd * b.k + joinAdd(rv, b.y)) * surgeAt(rv, b.y) * pb);
       const caps = (pts[j + 1] && pts[j + 1].on ? 0 : 1) | (j >= 2 && pts[j - 2].on ? 0 : 2);
       streams.push(b.x, b.y, rb, ra, Math.hypot(a.x - b.x, a.y - b.y), Math.atan2(a.x - b.x, b.y - a.y), 0, caps);
     }
