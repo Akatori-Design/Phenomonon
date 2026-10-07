@@ -970,7 +970,7 @@ function buildDropQuads() {
     // Water keeps draining down the channel, so a stream is thin near its top and fuller lower
     // down. Once the supply from above slows, the top thins further and fades away from the top.
     const y0 = pts.length ? pts[0].y : 0, span = Math.max(1, (pts.length ? pts[pts.length - 1].y : 0) - y0);
-    const dryFront = Math.min(1, Math.max(0, (0.6 - rv.flow) / 0.6)) * 0.85;
+    const dryFront = Math.min(1, Math.max(0, (0.85 - rv.flow) / 0.6)) * 0.9;   // starts draining from the top as soon as the supply drops
     const profile = (y) => {
       const u = Math.min(1, Math.max(0, (y - y0) / span));
       const sh = 0.45 + 0.8 * Math.pow(u, 0.8);
@@ -1167,7 +1167,7 @@ function stepRivulets(dt) {
     // Between surges the channel thins to a wet track and waits for more water. It dries up only
     // when the heavy rain stops, or when a wipe has cut it off from the water above.
     const target = rv.orphan || heavy === 0 ? 0 : 0.4;
-    rv.flow += (target - rv.flow) * (rv.orphan ? 0.004 : heavy > 0 ? 0.0015 : 0.003) * dt;   // without rain from above, a stream thins out faster
+    rv.flow += (target - rv.flow) * (rv.orphan ? 0.008 : heavy > 0 ? 0.0015 : 0.008) * dt;   // without rain from above, a stream drains away quickly
     if (rv.flow < 0.05) {
       for (let j = 0; j < pts.length; j += 2 + (rand() * 4 | 0)) {
         if (!pts[j].on) continue;
