@@ -11,7 +11,10 @@ A WebGL2 simulation of rain on a window, in one HTML file with no dependencies.
 - **Wiping**: drag to wipe as if with three fingers. The fingertips wipe clean while the lower fingers only smear; the fingers tilt with the arm. Pushed water stays on the glass as a strip against the side of the fingers you are moving toward, sagging to its lower end as it fills; on a long wipe a large drop breaks off that end and runs down, and the rest breaks into drops when you lift. Holding your fingers still makes water flow around them.
 - **Wipe lines** hold water back: drops spread along the line until they break through, and streams pool at the edge, then fall straight down. The resistance fades as the glass fogs over.
 - **Splashes**: the heavier the rain, the harder drops hit. A hard hit shatters the instant it lands into a smaller centre and a radial ring of beads; the jolt shakes nearby drops and can knock loose ones that were close to sliding.
-- **Sound** (starts on your first click; toggle in the panel): a deep knock for each drop that lands over a wash of rain, both following how heavy the rain is.
+- **Weather**: the rain swells and eases over tens of seconds, gusts of wind slant running water, rain falls out of focus beyond the glass, and a heavy downpour brings lightning that lights up every drop.
+- **The pane**: an invisible map of grime makes drops pin and snag unevenly, condensation gather in patches and streams wander and split; water collects in a ridge along the bottom edge and drips off.
+- **Optics**: out-of-focus lights open into round bokeh discs and glow, drops show a faint color fringe, and a dim reflection of the room sits on the glass. Moving the mouse shifts the view outside slightly, as if you moved your head.
+- **Sound** (starts on your first click; toggle in the panel): a knock for each drop that lands over a wash of rain, both following how heavy the rain is, plus the trickle of running streams, the swish and squeak of a wipe, and thunder after lightning.
 
 ## Controls
 
