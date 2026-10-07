@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rain-on-glass demo</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&display=swap">
+<style>
+  body { margin: 0; padding: 32px 16px; background: #0b0d12; color: #e6ebf3; font: 14px/1.5 "Geist Mono", ui-monospace, monospace; }
+  main { max-width: 960px; margin: 0 auto; display: grid; gap: 24px; }
+  h1 { font-size: 16px; font-weight: 500; margin: 0; }
+  p { margin: 0; color: #8d97aa; }
+  rain-on-glass { border-radius: 12px; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .row rain-on-glass { aspect-ratio: 4 / 3; }
+</style>
+</head>
+<body>
+<main>
+  <h1>&lt;rain-on-glass&gt;</h1>
+  <p>With controls. Click it once to allow sound, then turn sound on in the tray.</p>
+  <rain-on-glass id="main" controls></rain-on-glass>
+  <p>Without controls, set by attributes:</p>
+  <div class="row">
+    <rain-on-glass rainfall="20%"></rain-on-glass>
+    <rain-on-glass rainfall="90%" scene="night" fog="70%"></rain-on-glass>
+  </div>
+  <p id="credits"></p>
+</main>
+<script type="module">
+  import { credits } from './dist/rain-on-glass.js';
+  document.getElementById('credits').textContent = credits;
+</script>
+</body>
+</html>

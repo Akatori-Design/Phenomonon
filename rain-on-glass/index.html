@@ -82,13 +82,23 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
       <label class="file" for="photo">Use a photo or video</label>
       <input class="sr" type="file" id="photo" accept="image/*,video/*">
     </div>
-    <p class="note">Drag across the glass to wipe it as if with three fingers. Above 70% rainfall, streams start running down the pane. Drop a photo or video anywhere to look through it.</p>
+    <p class="note">Drag across the glass to wipe it as if with three fingers. Above 80% rainfall, streams start running down the pane. Drop a photo or video anywhere to look through it.</p>
   </div>
 </details>
 
 <script>
 (() => {
+// ---------- host ----------
+// Everything the effect needs from the page it runs in. The installable package swaps this block
+// for one scoped to a single <rain-on-glass> element (packages/rain-on-glass/build.mjs).
 const $ = (id) => document.getElementById(id);
+const viewW = () => innerWidth, viewH = () => innerHeight;
+const localX = (e) => e.clientX, localY = (e) => e.clientY;
+const onPage = (type, fn, opts) => addEventListener(type, fn, opts);
+const nextFrame = (fn) => requestAnimationFrame(fn);
+const newAudioContext = () => new (window.AudioContext || window.webkitAudioContext)();
+const onTeardown = () => {};   // the page never tears down
+// ---------- end host ----------
 const canvas = $('glass');
 const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, powerPreference: 'high-performance' });
 if (!gl) { $('nogl').hidden = false; $('tray').hidden = true; return; }
@@ -99,14 +109,16 @@ const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // Each slider's midpoint is the tuned look; either half of the track scales from there to 0 or 1.
 const MID = { rain: 0.7, size: 0.07, mist: 0.83, refract: 0.7, fog: 0.87, humid: 0.5 };
 const fromSlider = (k, v) => (v <= 0.5 ? MID[k] * v * 2 : MID[k] + (1 - MID[k]) * (v - 0.5) * 2);
-const P = {}, SL = {};   // P: values the simulation uses; SL: slider positions as shown (0–1)
+// Rainfall's lower half is gentler: 50% on the track is a light shower, and the upper half climbs to the same downpour.
+const rainCurve = (v) => (v <= 0.5 ? v * 0.5 : 0.25 + (v - 0.5) * 1.5);
+const P = {}, SL = {};   // P: values the simulation uses; SL: slider positions (0–1), with rainfall run through rainCurve
 for (const k of Object.keys(MID)) {
   const el = $(k), out = $(k + 'Out');
   el.value = k === 'rain' && reduced ? 0.3 : 0.5;
-  const upd = () => { SL[k] = +el.value; P[k] = fromSlider(k, SL[k]); out.textContent = Math.round(+el.value * 100) + '%'; };
+  const upd = () => { SL[k] = k === 'rain' ? rainCurve(+el.value) : +el.value; P[k] = fromSlider(k, SL[k]); out.textContent = Math.round(+el.value * 100) + '%'; };
   el.addEventListener('input', upd); upd();
 }
-if (innerWidth < 640) $('tray').open = false;
+if (viewW() < 640) $('tray').open = false;
 
 // ---------- GL helpers ----------
 function shader(type, src) {
@@ -685,6 +697,7 @@ function useVideo(file) {
     a.play().catch(() => {});
   }, { once: true });
 }
+onTeardown(stopVideo);
 function updateVideo() {
   if (!vid) return;
   const cur = vid.players[vid.cur], next = vid.players[1 - vid.cur];
@@ -721,14 +734,14 @@ async function loadPhoto(file) {
   setBackground(c);
 }
 $('photo').addEventListener('change', (e) => loadPhoto(e.target.files[0]));
-addEventListener('dragover', (e) => e.preventDefault());
-addEventListener('drop', (e) => { e.preventDefault(); loadPhoto(e.dataTransfer.files[0]); });
+onPage('dragover', (e) => e.preventDefault());
+onPage('drop', (e) => { e.preventDefault(); loadPhoto(e.dataTransfer.files[0]); });
 
 // ---------- sizing ----------
 let simW = 0, simH = 0, S = 1, D = null, W = null;
 function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 2);
-  simW = Math.max(1, Math.round(innerWidth)); simH = Math.max(1, Math.round(innerHeight));
+  simW = Math.max(1, Math.round(viewW())); simH = Math.max(1, Math.round(viewH()));
   S = Math.max(0.6, Math.min(1.4, Math.min(simW, simH) / 820));
   canvas.width = Math.round(simW * dpr); canvas.height = Math.round(simH * dpr);
   // the water is drawn at the screen's real pixel density, up to ~4.5 megapixels
@@ -974,9 +987,9 @@ function stepWeather(dt) {
 }
 // Moving the mouse moves the viewer's head a little: the view outside shifts behind the glass.
 const parallax = { x: 0, y: 0, tx: 0, ty: 0 };
-addEventListener('pointermove', (e) => {
-  parallax.tx = -(e.clientX / Math.max(1, innerWidth) - 0.5) * 0.02;
-  parallax.ty = (e.clientY / Math.max(1, innerHeight) - 0.5) * 0.02;
+onPage('pointermove', (e) => {
+  parallax.tx = -(localX(e) / Math.max(1, viewW()) - 0.5) * 0.02;
+  parallax.ty = (localY(e) / Math.max(1, viewH()) - 0.5) * 0.02;
 }, { passive: true });
 
 function step(dt) {
@@ -992,13 +1005,13 @@ function step(dt) {
   const area = simW * simH / (1280 * 800);
 
   // rain landing on the pane, with a small splash of satellite droplets
-  // above 80% the rain thickens into a downpour: up to 2.5x as many drops at 100%
+  // above about 87% on the slider the rain thickens into a downpour: up to 2.5x as many drops at 100%
   let lambda = P.rain * P.rain * 1.8 * (1 + 1.5 * Math.max(0, (SL.rain - 0.8) / 0.2) ** 1.5) * weather.gust * area * dt;
   while (lambda > 0) {
     if (rand() < Math.min(1, lambda)) {
       const x = rand() * simW, y = rand() * simH * 1.05 - simH * 0.05;
       // heavier rain falls in bigger drops: light rain is mostly fine drops, a downpour mostly large ones
-      // heavier rain falls in bigger drops; from about 70% the biggest are already too heavy to hold and drip at once
+      // heavier rain falls in bigger drops; from about 80% the biggest are already too heavy to hold and drip at once
       const hv = SL.rain, r = Math.min(maxDropR(), minR + (maxR * (0.4 + 0.75 * hv) - minR) * Math.pow(rand(), 2.6 - 1.6 * hv));
       if (underHand(x, y, 0)) { lambda -= 1; continue; }
       // The heavier the rain, the harder each drop hits the glass. A hard hit bursts: it lands
@@ -1644,8 +1657,8 @@ function stepRivulets(dt) {
   }
   if (mergeAcc >= 4) { mergeAcc = 0; mergeTouchingStreams(); }
   const { maxR } = radii();
-  const heavy = Math.max(0, (SL.rain - 0.7) / 0.3);   // streams only above 70% on the rainfall slider
-  const want = Math.round(heavy ** 1.5 * 16 * Math.sqrt(simW * simH / (1280 * 800)));   // a few at 80%, more at 90%, many at 100%
+  const heavy = Math.max(0, (SL.rain - 0.7) / 0.3);   // streams only above 80% on the rainfall slider
+  const want = Math.round(heavy ** 1.5 * 16 * Math.sqrt(simW * simH / (1280 * 800)));   // a few at 87%, more at 93%, many at 100%
   if (rivulets.filter((r) => r.fed && !r.draining).length < want && rivulets.length < 40 && rand() < 0.03 * dt) spawnRivulet();
 
   for (let i = rivulets.length - 1; i >= 0; i--) {
@@ -1843,7 +1856,7 @@ function stepRivulets(dt) {
 // click, tap or key press anywhere on the page.
 let audio = null, soundOn = true, tapBudget = 0;
 function initAudio() {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const ctx = newAudioContext();
   const sr = ctx.sampleRate, master = ctx.createGain(), comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -12; comp.ratio.value = 3; comp.attack.value = 0.002; comp.release.value = 0.15;
   master.gain.value = 1; master.connect(comp); comp.connect(ctx.destination);
@@ -1999,7 +2012,7 @@ function startSound() {
   if (!audio) audio = initAudio();
   if (audio.ctx.state !== 'running') audio.ctx.resume();
 }
-for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, startSound, { capture: true, passive: true });
+for (const ev of ['pointerdown', 'keydown', 'touchstart']) onPage(ev, startSound, { capture: true, passive: true });
 $('sound').addEventListener('click', () => {
   soundOn = !soundOn;
   if (soundOn) startSound();
@@ -2012,7 +2025,7 @@ $('sound').addEventListener('click', () => {
 // Hand frame: origin at the middle fingertip, +y toward the palm. The fingertips press firmly
 // and wipe clean; the lower segments press lightly and smear.
 let hand = null, stroke = null, lastPt = null, handA = 0, sway = 0;
-const pt = (e) => ({ x: e.clientX, y: e.clientY });
+const pt = (e) => ({ x: localX(e), y: localY(e) });
 const TIP = 0.42;   // share of the finger length that is firm fingertip pad
 
 function handGeom() {
@@ -2367,7 +2380,7 @@ function passFinal() {
 // (deferred until the page has a real size; a frame can start out 0 x 0)
 let warmed = false;
 function prewarm() {
-  if (warmed || innerWidth < 2 || innerHeight < 2) return;
+  if (warmed || viewW() < 2 || viewH() < 2) return;
   warmed = true;
   const { minR, maxR } = radii(), area = simW * simH / (1280 * 800);
   for (let i = 0; i < 160 * area; i++) addDrop(rand() * simW, rand() * simH, minR + (maxR * 0.8 - minR) * Math.pow(rand(), 2));
@@ -2378,13 +2391,13 @@ resize();
 prewarm();
 
 let resizeT = 0;
-addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(resize, 120); });
+onPage('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(resize, 120); });
 
 let last = performance.now(), statT = 0;
 function frame(now) {
   const dt = Math.min(Math.max((now - last) / 16.667, 0.2), 3) * (reduced ? 0.6 : 1);
   last = now;
-  if (innerWidth > 0 && innerHeight > 0 && (Math.round(innerWidth) !== simW || Math.round(innerHeight) !== simH)) resize();
+  if (viewW() > 0 && viewH() > 0 && (Math.round(viewW()) !== simW || Math.round(viewH()) !== simH)) resize();
   if (!warmed) prewarm();
   if (!paused) step(dt);
   stepSound(dt);
@@ -2397,9 +2410,9 @@ function frame(now) {
     let moving = 0; for (const d of drops) if (d.moving) moving++;
     $('stat').textContent = `${drops.length} drops · ${moving} running`;
   }
-  requestAnimationFrame(frame);
+  nextFrame(frame);
 }
-requestAnimationFrame(frame);
+nextFrame(frame);
 })();
 </script>
 </body>
