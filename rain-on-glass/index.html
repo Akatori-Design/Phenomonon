@@ -201,7 +201,8 @@ void main() {
     }
     o = vec4(f * fade * above, max(0.0, 1.0 - d * d) * r1 * 0.35 * fade * above / 32.0, 0.45 * above * (1.0 - smoothstep(0.9, 1.3, d)), 0.0);
   } else if (uMode == 3) {
-    // stream: a rounded bead of water sitting flat on the glass, so the crown is broad and gentle.
+    // stream: a low, flat film of water stuck to the glass, wider than it is deep: a broad, nearly
+    // level top that shows the glass behind almost unchanged, bending light mostly at its edges.
     // Height keeps one smooth cross-section (blended with MAX). The outline field goes to alpha and
     // adds up, so wherever water meets water the join rounds off the way a liquid does. Each
     // segment only adds its own slab (plus end caps, p1 bits), so a stream doesn't swell itself.
@@ -210,7 +211,8 @@ void main() {
     int caps = int(vB.w + 0.5);
     if ((vL.y < 0.0 && (caps & 1) == 0) || (vL.y >= h && (caps & 2) == 0)) f = 0.0;
     float e = min(d, 1.0);
-    o = vec4(0.0, (1.0 - e * e * e * e) * r1 * 0.8 / 32.0, d < 1.0 ? 1.0 : 0.0, f);
+    float e2 = e * e;
+    o = vec4(0.0, (1.0 - e2 * e2 * e2) * r1 * 0.4 / 32.0, d < 1.0 ? 1.0 : 0.0, f);
   } else if (uMode == 1) {
     o = vec4(0.0, 0.0, 0.0, 1.0 - smoothstep(0.55, 1.0, 1.0 + s / r1));
   } else {
@@ -335,7 +337,7 @@ void main() {
   float fw = max(fwidth(field), 1e-4);
   float stream = step(0.7, w.b);                              // streams write 1 into B
   float film = clamp(w.b / 0.45, 0.0, 1.0) * (1.0 - stream);  // a running drop's tail: thin water, no edge
-  float soft = mix(fw, T * 0.9, film);
+  float soft = mix(fw, T * 0.9, max(film, stream * 0.35));   // streams: soft edges where the film thins out
   float mask = smoothstep(T - soft, T + soft, field);
 
   vec4 wL = texture(uWater, uv - vec2(uTexel.x * 2.0, 0.0)), wR = texture(uWater, uv + vec2(uTexel.x * 2.0, 0.0));
@@ -380,8 +382,8 @@ void main() {
   inside += max(view - 0.6, 0.0) * 1.1;   // the street's lights glint through each drop in their own colors
   float slope = length(n.xy);
   float rim = smoothstep(0.45, 0.77, slope);
-  inside *= 1.0 - rim * mix(0.3 + 0.25 * max(n.y, 0.0), 0.2, stream) * (1.0 - 0.85 * film);   // the upper rim reads darkest
-  float outline = (1.0 - smoothstep(T, T * 1.9, field)) * (1.0 - film);   // thin dark line where the surface turns away
+  inside *= 1.0 - rim * mix(0.3 + 0.25 * max(n.y, 0.0), 0.08, stream) * (1.0 - 0.85 * film);   // the upper rim reads darkest
+  float outline = (1.0 - smoothstep(T, T * 1.9, field)) * (1.0 - film) * (1.0 - 0.85 * stream);   // thin dark line where the surface turns away
   inside = mix(inside, inside * 0.28, outline * 0.8);
   // the drop is a lens: it gathers the light from behind into a bright crescent low inside it
   vec3 sky = lit(textureLod(uBg, bgUv(uv + vec2(0.0, 0.06)), uLod).rgb);
@@ -415,6 +417,10 @@ void main() {
   float flow = uv.y * 90.0 + uTime * 9.0, wav = sin(flow + uv.x * 23.0) * sin(flow * 0.47 - uv.x * 9.0 + 1.7);
   float vary = 0.65 + 0.35 * wav;
   inside += (vec3(0.08) + hazy * 0.1) * crown * vary;
+  // lit from the upper left: a stream's left edge catches a highlight, its right edge falls darker
+  float sl = length(nO.xy);
+  inside += stream * (vec3(0.2) + hazy * 0.25) * smoothstep(0.1, 0.5, sl) * max(-nO.x / max(sl, 1e-3), 0.0) * 0.6;
+  inside *= 1.0 - stream * smoothstep(0.1, 0.5, sl) * max(nO.x / max(sl, 1e-3), 0.0) * 0.3;
   float glintS = pow(max(wav, 0.0), 12.0) * (stream * (1.0 - smoothstep(0.1, 0.6, slope)) + film * 0.6);
   inside += vec3(0.5, 0.48, 0.44) * glintS * 0.35;
 
@@ -1263,9 +1269,16 @@ function buildDropQuads() {
       const ra = Math.max(0.3, (wd * a.k + joinAdd(rv, a.y)) * surgeAt(rv, a.y) * pa), rb = Math.max(0.3, (wd * b.k + joinAdd(rv, b.y)) * surgeAt(rv, b.y) * pb);
       const caps = (pts[j + 1] && pts[j + 1].on ? 0 : 1) | (j >= 2 && pts[j - 2].on ? 0 : 2);
       streams.push(b.x, b.y, rb, ra, Math.hypot(a.x - b.x, a.y - b.y), Math.atan2(a.x - b.x, b.y - a.y), 0, caps);
+      // the edges catch on the glass here and there, each side on its own: small irregular bumps
+      const hb = ((Math.sin(j * 12.9898 + rv.phase * 78.233) * 43758.5453) % 1 + 1) % 1;
+      if (hb < 0.22) {
+        const sl = Math.hypot(a.x - b.x, a.y - b.y) || 1, side = hb < 0.11 ? 1 : -1;
+        const px = -(a.y - b.y) / sl * side, py = (a.x - b.x) / sl * side, br = rb * (0.35 + hb * 2);
+        streams.push(b.x + px * rb * 0.6, b.y + py * rb * 0.6, br, br * 0.8, 3 * S, Math.atan2(a.x - b.x, b.y - a.y), 0, 3);
+      }
     }
     if ((rv.carving || rv.stalled) && pts.length) {
-      const h = pts[pts.length - 1], g = rv.stalled ? 1.5 : 1.9;   // a waiting tip is a smaller, rounded end
+      const h = pts[pts.length - 1], g = rv.pauseT > 0 ? 1.9 + 0.9 * (1 - rv.pauseT / rv.pauseLen) : rv.stalled ? 1.5 : 1.9;   // a waiting tip is a smaller, rounded end; a pausing one swells
       dropQuads.push(h.x, h.y, wd * g, wd * 1.3, wd * 2, 0, 0.04, rv.phase);
     }
     if (rv.pool && rv.pool.dir) edgeFilm(rv.pool.x, rv.pool.y, rv.pool.up, rv.pool.down, rv.pool.th, rv.ph, rv.pool.dir);
@@ -1299,7 +1312,7 @@ function newRivulet(x0, y0, o = {}) {
   return {
     pts: [], y0, x: x0, vx: 0, phase: rand() * 100,
     ph: o.ph || [rand() * 6.283, rand() * 6.283, rand() * 6.283],
-    stopAt: o.stopAt ?? Infinity, speed: (2.5 + rand() * 4) * S, w: o.w ?? (3 + rand() * 3) * S, flow: o.flow ?? 1,
+    stopAt: o.stopAt ?? Infinity, speed: (2.5 + rand() * 4) * S, w: o.w ?? (3.5 + rand() * 3.5) * S, flow: o.flow ?? 1,
     surges: [], front: -1, carving: false, stalled: false, burst: 0, joined: null, joins: [], pool: null, spill: null, orphan: !!o.orphan,
   };
 }
@@ -1309,9 +1322,13 @@ function spawnRivulet() {
 }
 const streamWidth = (rv) => rv.w * (0.35 + 0.65 * Math.min(1, rv.flow));
 // Channel width along its length: smooth, irregular, fixed once the water has carved it.
+// Water in a streak gathers into bulges and beads with thin necks between them: mostly narrow,
+// swelling now and then to twice its usual width.
 function channelWidth(rv, y) {
   const [a, b, c] = rv.ph;
-  return 1 + 0.22 * Math.sin(y * 0.021 + a) + 0.13 * Math.sin(y * 0.053 + b) + 0.07 * Math.sin(y * 0.117 + c);
+  const slow = 1 + 0.2 * Math.sin(y * 0.017 + a);
+  const v = 0.5 + 0.5 * Math.sin(y * 0.09 + b) * Math.sin(y * 0.031 + c);
+  return slow * (0.5 + 1.6 * v * v * v);
 }
 function addSurge(rv, y, extra = 0) {
   rv.surges.push({
@@ -1491,6 +1508,9 @@ function stepRivulets(dt) {
         // the head meanders down in smooth, unhurried bends, carving the channel
         rv.carving = true;
         let adv = rv.speed * (1 + 2 * rv.burst) * dt * (0.4 + rand() * 1.2);
+        // every so often the head stops, swells into a bead, then runs on
+        if (rv.pauseT > 0) { rv.pauseT -= dt; adv = 0; rv.stalled = true; }
+        else if (rand() < 0.004 * dt) { rv.pauseT = rv.pauseLen = 15 + rand() * 45; }
         if (pts.length) adv *= 1 - 0.8 * wipeEdge(rv.x, pts[pts.length - 1].y + wd);
         while (adv > 0) {
           const y = (pts.length ? pts[pts.length - 1].y : rv.y0) + 3;
@@ -1501,13 +1521,16 @@ function stepRivulets(dt) {
             const q = pointAt(o, y);
             if (q && q.on && Math.abs(q.x - rv.x) < nd) { nd = Math.abs(q.x - rv.x); near = { o, q }; }
           }
-          rv.vx += (rand() - 0.5) * 0.22 * S;
+          // mostly straight runs; now and then the front snags and the stream jogs sideways
+          if (rv.jog > 0) rv.jog -= 1;
+          else if (rand() < 0.03) { rv.jog = 2 + (rand() * 5 | 0); rv.vx += (rand() < 0.5 ? -1 : 1) * (0.7 + rand() * 0.8) * S; }
+          rv.vx += (rand() - 0.5) * 0.05 * S;
           if (near && nd < wd * 8) rv.vx += Math.sign(near.q.x - rv.x) * 0.12 * S;
           rv.vx += wetPull(rv.x, y + 6 * S, wd + 6 * S) * 0.3 * S;
           rv.vx -= (dirtAt(rv.x + 8 * S, y + 6 * S) - dirtAt(rv.x - 8 * S, y + 6 * S)) * 0.8 * S;   // steering round grimy patches
           rv.vx += weather.wind * 0.06 * S;
-          rv.vx *= 0.96;
-          rv.vx = Math.max(-1.1, Math.min(1.1, rv.vx));
+          rv.vx *= rv.jog > 0 ? 0.97 : 0.8;
+          rv.vx = Math.max(-1.6, Math.min(1.6, rv.vx));
           let x = rv.x + rv.vx;
           if (handNow) {
             if (!rv.side && underHand(x, y, wd)) {
@@ -1519,7 +1542,8 @@ function stepRivulets(dt) {
           } else { rv.side = 0; rv.blockT = null; }
           rv.x = x;
           pts.push({ x: rv.x, y, k: channelWidth(rv, y), on: true });
-          eraseAt(rv.x, y, rv.w * 2.4);
+          eraseAt(rv.x, y, rv.w * 3.2);   // the water clears a wider path than it covers
+          if (rand() < 0.12) bead(beads, rv.x + (rand() < 0.5 ? -1 : 1) * rv.w * (1.6 + rand() * 2), y + (rand() - 0.5) * 4, (0.4 + rand() * 0.9) * S, 0.12);
           markWet(rv.x, y, rv.w * 3);
           if (!rv.orphan && rv.flow > 0.7 && pts.length > 40 && rivulets.length < 30 && rand() < 0.0015 * (0.5 + dirtAt(rv.x, y + 8 * S))) {
             // a heavy stream divides, often where grime splits the flow; the branches may rejoin lower down
