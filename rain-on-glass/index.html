@@ -153,6 +153,7 @@ in vec2 vW;
 in vec4 vA;
 in vec4 vB;
 uniform int uMode;
+uniform float uHcap;   // the tallest a drop can stand on the glass, in CSS px (gravity caps it)
 out vec4 o;
 float sdCap(vec2 p, float r1, float r2, float h) {
   p.x = abs(p.x);
@@ -176,10 +177,18 @@ void main() {
     // p0 = how uneven the edge is, p1 = seed: the outline wobbles with angle around the body
     float th = atan(vL.y - h * 0.4, vL.x);
     float sd = vB.w;
-    s -= (0.5 * sin(2.0 * th + sd) + 0.3 * sin(3.0 * th + sd * 1.7) + 0.2 * sin(5.0 * th + sd * 2.9)) * vB.z * r1;
+    float big = clamp(r1 / uHcap - 0.6, 0.0, 1.0);   // 0 for small drops, 1 for big ones
+    // big drops get caught at points on the glass, so their outline is wavier
+    s -= (0.5 * sin(2.0 * th + sd) + 0.3 * sin(3.0 * th + sd * 1.7) + 0.2 * sin(5.0 * th + sd * 2.9)
+          + 0.14 * big * sin(7.0 * th + sd * 4.3)) * vB.z * r1;
     float d = max(0.0, 1.0 + s / r1);
     float f = d < 1.3 ? pow(1.0 - d * d / 1.69, 3.0) : 0.0;
-    o = vec4(f, max(0.0, 1.0 - d * d) * r1 / 32.0, 0.0, 0.0);
+    // Gravity caps how tall water stands on glass: a small drop is a full dome, a big one levels
+    // off into a flat-topped puddle with steep sides. On a vertical pane it is also lopsided:
+    // fuller and steeper along its lower edge, thinner toward the top.
+    float lin = max(0.0, 1.0 - d * d) * r1;
+    float vfac = mix(1.0, mix(1.25, 0.6, smoothstep(-r1, h + r2, vL.y)), big);
+    o = vec4(f, uHcap * tanh(lin / uHcap) * vfac / 32.0, 0.0, 0.0);
   } else if (uMode == 5) {
     // Tail of a running drop: the water thins toward the wet track it leaves, so there is no edge
     // to see. Its field and height fade away along its length, and B marks it as thin film.
@@ -217,7 +226,7 @@ void main() {
     o = vec4(0.0, 0.0, 0.0, clamp(a, 0.0, 1.0));
   }
 }`;
-const blob_names = ['uView', 'uMargin', 'uMode'];
+const blob_names = ['uView', 'uMargin', 'uMode', 'uHcap'];
 const QUAD_VS = `#version 300 es
 layout(location=0) in vec2 aQuad;
 out vec2 vUv;
@@ -253,6 +262,7 @@ uniform float uWind;      // -1..1, slants the rain outside
 uniform vec2 uParallax;   // small shift of the view outside as the viewer's head moves
 uniform float uFlash;     // lightning, 0..1
 uniform float uWdpr;      // water-map texels per CSS pixel
+uniform float uHcap;      // same cap as the blobs: the height a big, flat-topped drop levels off at
 const float T = 0.068;
 
 float hash1(float n) { return fract(sin(n * 127.1) * 43758.5453); }
@@ -387,6 +397,18 @@ void main() {
   // showing what's behind; that is what gives drops and streams their glassy edges.
   float fres = 0.02 + 0.98 * pow(1.0 - clamp(nO.z, 0.0, 1.0), 5.0);
   inside = mix(inside, roomEnv(reflect(vec3(0.0, 0.0, -1.0), nO)), clamp(fres * 1.6, 0.0, 0.85) * (1.0 - 0.7 * film));
+  // A big, flat-topped drop: a dark band where its side plunges to the glass, a thin bright line of
+  // focused light just inside that band, and a broad soft sheen of the room's light across the top.
+  float hNear = max(max(max(wL.g, wR.g), max(wU.g, wD.g)), w.g) * 32.0;
+  float bigD = smoothstep(0.7, 0.92, hNear / uHcap) * (1.0 - stream) * (1.0 - film);
+  float slopeO = length(nO.xy);
+  float band = smoothstep(0.5, 0.8, slopeO);
+  float line = smoothstep(0.22, 0.34, slopeO) * (1.0 - smoothstep(0.34, 0.48, slopeO));
+  float flatTop = 1.0 - smoothstep(0.05, 0.25, slopeO);
+  float sheen = pow(max(dot(reflect(-normalize(vec3(-0.3, 0.55, 1.0)), nO), vec3(0.0, 0.0, 1.0)), 0.0), 8.0);
+  inside = mix(inside, inside * 0.45, band * bigD * 0.6);
+  inside += (vec3(0.22) + hazy * 0.25) * line * bigD;
+  inside += vec3(1.0, 0.95, 0.88) * sheen * flatTop * bigD * 0.07;
   // streams catch the light across their flat crown: a soft, uneven sheen over roughly the middle half
   float crown = (1.0 - smoothstep(0.06, 0.5, slope)) * stream;
   // moving water shimmers: ripples on its surface carry small highlights downstream
@@ -407,7 +429,7 @@ void main() {
 const blob = program(BLOB_VS, BLOB_FS, blob_names);
 const copy = program(QUAD_VS, COPY_FS, ['uTex']);
 const fill = program(QUAD_VS, FILL_FS, ['uColor']);
-const fin = program(QUAD_VS, FINAL_FS, ['uWater', 'uMist', 'uBg', 'uTexel', 'uBgScale', 'uBgSize', 'uAspect', 'uRefract', 'uFog', 'uLod', 'uTime', 'uRainOut', 'uWind', 'uParallax', 'uFlash', 'uWdpr']);
+const fin = program(QUAD_VS, FINAL_FS, ['uWater', 'uMist', 'uBg', 'uTexel', 'uBgScale', 'uBgSize', 'uAspect', 'uRefract', 'uFog', 'uLod', 'uTime', 'uRainOut', 'uWind', 'uParallax', 'uFlash', 'uWdpr', 'uHcap']);
 
 const quadBuf = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
@@ -469,6 +491,7 @@ function drawBlobs(b, mode, margin) {
   gl.uniform2f(blob.u.uView, simW, simH);
   gl.uniform1f(blob.u.uMargin, margin);
   gl.uniform1i(blob.u.uMode, mode);
+  gl.uniform1f(blob.u.uHcap, holdR() * 0.7);
   gl.bindVertexArray(vaoInst);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
   gl.bufferData(gl.ARRAY_BUFFER, b.a.subarray(0, b.n * 8), gl.DYNAMIC_DRAW);
@@ -1194,7 +1217,7 @@ function buildDropQuads() {
       const st = Math.min(1.6, d.vy / (3 * S));
       const ang = -Math.atan2(d.vx, Math.max(0.3, d.vy)) * 0.8;
       const bl = d.bulge || 0;   // caught: water piles up at the front edge
-      dropQuads.push(d.x, d.y + d.r * 0.15 * bl, d.r * sp * (1 + 0.12 * bl), d.r * (0.82 - 0.12 * bl), d.r * (0.3 + 0.5 * st + 0.5 * bl), ang, 0.03, d.seed);
+      dropQuads.push(d.x, d.y + d.r * 0.15 * bl, d.r * sp * (1 + 0.12 * bl), d.r * (0.82 - 0.12 * bl), d.r * (0.3 + 0.5 * st + 0.5 * bl), ang, 0.03 + 0.05 * Math.min(1, Math.max(0, d.r / rSlide - 1)), d.seed);
       const big = Math.min(1.5, Math.max(0, d.r / rSlide - 1));   // bigger drops drag a longer tail
       tails.push(d.x, d.y, d.r * sp * 0.95, d.r * 0.24, d.r * (1.2 + 2.2 * st) * (1 + 1.6 * big), ang, 0, 0);   // as wide as the drop where it starts, tapering into its wet track
       if (d.vy > 4 * S) tails.push(d.x, d.y, d.r * 0.9, d.r * 0.8, Math.min(d.vy * 1.5, d.r * 4), ang, Math.min(0.6, d.vy / (25 * S)), 1);   // a fast drop smears along its path
@@ -1204,7 +1227,8 @@ function buildDropQuads() {
       const g = Math.min(1, (d.r / rSlide) ** 2) * (0.85 + 0.3 * d.sag);
       // a damped wobble after an impact or merge: wider, then taller, then wider again, settling
       const jg = d.jig ? d.jig * Math.min(1, d.r / rSlide) * Math.exp(-d.jigT * 0.16) * Math.cos(d.jigT * 1.1) : 0;   // surface tension holds tiny drops almost still
-      dropQuads.push(d.x, d.y, d.r * sp * (1 + jg), d.r * sp * (0.9 - 0.2 * g) * (1 + jg * 0.6), Math.max(0, d.r * (0.1 + 0.55 * g) - d.r * jg * 1.6), d.tilt, d.wob + (d.splat || 0) * 0.2, d.seed);   // a fresh splat is a little ragged
+      const bigS = Math.min(1, Math.max(0, d.r / (rSlide * 0.7) - 0.6));   // big drops: thin top, full bottom, wavier edge
+      dropQuads.push(d.x, d.y, d.r * sp * (1 + jg), d.r * sp * (0.9 - 0.2 * g - 0.12 * bigS) * (1 + jg * 0.6), Math.max(0, d.r * (0.1 + 0.55 * g + 0.15 * bigS) - d.r * jg * 1.6), d.tilt, d.wob * (1 + 0.8 * bigS) + (d.splat || 0) * 0.2, d.seed);   // a fresh splat is a little ragged
     }
   }
   for (const rv of rivulets) {
@@ -2066,6 +2090,7 @@ function passFinal() {
   gl.uniform2f(u.uParallax, parallax.x, parallax.y);
   gl.uniform1f(u.uFlash, weather.flash);
   gl.uniform1f(u.uWdpr, W.w / simW);
+  gl.uniform1f(u.uHcap, holdR() * 0.7);
   gl.bindVertexArray(vaoQuad); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
