@@ -790,10 +790,10 @@ function merge(a, b) {
   a.vy = Math.max(a.vy, b.vy) * 0.9 + (a.moving ? 0.3 : 0);
   a.vx = (a.vx * ma + b.vx * mb) / (ma + mb);
   a.stick = Math.min(a.stick, b.stick);
-  a.spread = Math.max(a.spread, 0.18);
+  a.spread = Math.max(a.spread, 0.06);
   if (mb > ma) { a.wob = b.wob; a.seed = b.seed; a.sag = b.sag; a.tilt = b.tilt; }
   if (a.moving && !wasMoving) { a.trailY = a.y; a.gap = a.r; }
-  a.jig = Math.min(0.3, 0.08 + 0.45 * Math.min(ma, mb) / (ma + mb)); a.jigT = 0;   // the merged drop wobbles as it settles
+  a.jig = Math.min(0.08, 0.02 + 0.12 * Math.min(ma, mb) / (ma + mb)); a.jigT = 0;   // the merged drop quivers slightly as it settles
   if (b.pull && b.pull !== a) b.pull.pull = null;
   b.dead = true;
 }
@@ -918,8 +918,8 @@ function step(dt) {
       // grows or pulls back; the pieces are simply there and behave as ordinary drops.
       const burst = hit > 0.55 && drops.length < MAX * 0.75;
       const keep = burst ? 1 - 0.55 * hit : 1, cr = r * Math.cbrt(keep);
-      const d0 = addDrop(x, y, cr, { spread: burst ? 0.04 : 0.3 + rand() * 0.3 });
-      if (d0) { d0.splat = Math.max(d0.splat || 0, burst ? hit * 0.5 : hit * 0.3); d0.jig = 0.1 + 0.15 * hit; d0.jigT = 0; }
+      const d0 = addDrop(x, y, cr, { spread: burst ? 0.04 : 0.08 + rand() * 0.1 });
+      if (d0) { d0.splat = Math.max(d0.splat || 0, burst ? hit * 0.5 : hit * 0.3); d0.jig = 0.02 + 0.04 * hit; d0.jigT = 0; }
       if (burst) {
         let vol = r ** 3 - cr ** 3;
         const want = Math.round(6 + 8 * hit + rand() * 3), a0 = rand() * Math.PI * 2, id = ++burstCount;
@@ -1132,8 +1132,8 @@ function buildDropQuads() {
     } else {
       const g = Math.min(1, d.r / rSlide) * (0.4 + 0.6 * d.sag);   // heavier drops sag more
       // a damped wobble after an impact or merge: wider, then taller, then wider again, settling
-      const jg = d.jig ? d.jig * Math.exp(-d.jigT * 0.07) * Math.cos(d.jigT * 0.85) : 0;
-      dropQuads.push(d.x, d.y, d.r * sp * (1 + jg), d.r * sp * (0.9 - 0.2 * g) * (1 + jg * 0.6), Math.max(0, d.r * (0.1 + 0.55 * g) - d.r * jg * 1.6), d.tilt, d.wob + (d.splat || 0) * 0.45, d.seed);   // a fresh splat is ragged
+      const jg = d.jig ? d.jig * Math.min(1, d.r / rSlide) * Math.exp(-d.jigT * 0.16) * Math.cos(d.jigT * 1.1) : 0;   // surface tension holds tiny drops almost still
+      dropQuads.push(d.x, d.y, d.r * sp * (1 + jg), d.r * sp * (0.9 - 0.2 * g) * (1 + jg * 0.6), Math.max(0, d.r * (0.1 + 0.55 * g) - d.r * jg * 1.6), d.tilt, d.wob + (d.splat || 0) * 0.2, d.seed);   // a fresh splat is a little ragged
     }
   }
   for (const rv of rivulets) {
