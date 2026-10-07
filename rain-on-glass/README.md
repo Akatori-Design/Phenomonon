@@ -5,6 +5,7 @@ A WebGL2 simulation of rain on a window, in one HTML file with no dependencies.
 ## What it does
 
 - **Drops** land at random, sag under their own weight, and merge into one drop holding their combined volume when they come within a pixel. Small and mid-size drops stay put; a drop slides only once it holds more water than the glass can carry, then runs down as one U-shaped body at a speed proportional to its volume, losing water as it goes until it comes to rest.
+- **Physics**: running drops stick and slip, caught by the glass until their weight tears them free (small ones often, heavy ones hardly ever); resting drops are domes when small and sag more as they grow; a runner swerves toward water it swallows; spray flies downwind; condensation forms as micro-mist after a wipe and matures into beads; humidity sets how fast the glass fogs and drops evaporate.
 - **Refraction**: every drop and stream acts as a small lens showing an inverted view of the street, with dark rims and soft highlights.
 - **Condensation** fogs the glass; running water clears channels through it, and it slowly forms back.
 - **Streams** pour from the top of the pane only above 70% rainfall; at any rainfall, a running drop that gathers enough water opens a stream of its own. Streams meander down, carry surges of water, merge with each other, absorb drops they touch, and thin out and dry when no more water reaches them.
@@ -18,7 +19,7 @@ A WebGL2 simulation of rain on a window, in one HTML file with no dependencies.
 
 ## Controls
 
-Rainfall, drop size, condensation, refraction and fog sliders (50% is the tuned default), a choice of view outside, wipe glass, pause, sound, and "Use a photo or video" to look through your own image or video clip (or drop one onto the page).
+Rainfall, drop size, condensation, refraction, fog and humidity sliders (50% is the tuned default), a choice of view outside, wipe glass, pause, sound, and "Use a photo or video" to look through your own image or video clip (or drop one onto the page).
 
 ## Run it
 
