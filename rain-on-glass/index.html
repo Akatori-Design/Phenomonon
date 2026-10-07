@@ -1932,6 +1932,10 @@ function sweep(a, b, a0, a1) {
       const q = (c * cc.x - s * cc.y) * nx + (s * cc.x + c * cc.y) * ny;
       ePos = Math.max(ePos, q + cc.r); eNeg = Math.min(eNeg, q - cc.r);
     }
+    // remember where both edges of the wipe ran, so water left on them can follow their curve
+    const eh = stroke.edges || (stroke.edges = { pos: [], neg: [] });
+    eh.pos.push({ x: x + nx * ePos, y: y + ny * ePos }); eh.neg.push({ x: x + nx * eNeg, y: y + ny * eNeg });
+    if (eh.pos.length > 80) { eh.pos.shift(); eh.neg.shift(); }
     // so is the film of mist and fog
     stroke.water += stepLen * (ePos - eNeg) * (0.15 + 0.6 * P.mist) * S;
     // there is only so much the fingers can push; beyond that it smears off the sides as film
@@ -1964,27 +1968,32 @@ function sweep(a, b, a0, a1) {
     }
   }
 
-  // Changing direction mid-wipe leaves a small, thin puddle lying along the wipe line, mostly on
-  // the outside of the turn where the fingers' edge sweeps fastest.
+  // Turning partway through a wipe leaves a thin, curved sliver of water lying along the outside
+  // edge of the bend, following the curve the fingers just traced. Only after a real change of
+  // direction, and spaced out along the stroke, so there are just a few.
   if (len > 0.5 && pl > 0.2) {
     const ux = dx / len, uy = dy / len;
     const turn = Math.acos(Math.max(-1, Math.min(1, pmx * ux + pmy * uy)));
-    let n = Math.min(2, Math.floor(turn * 6 + rand()));
-    if (n > 0) {
-      const c = Math.cos(a1), s = Math.sin(a1);
-      let ePos = -Infinity, eNeg = Infinity;
-      for (const cc of hand.circles) {
-        const q = (c * cc.x - s * cc.y) * nx + (s * cc.x + c * cc.y) * ny;
-        ePos = Math.max(ePos, q + cc.r); eNeg = Math.min(eNeg, q - cc.r);
+    const side = pmx * uy - pmy * ux > 0 ? 'neg' : 'pos';   // outside of the bend
+    stroke.turnAcc = (stroke.turnAcc || 0) + turn;
+    const sinceLast = stroke.dist - (stroke.lastSliver ?? -1e9);
+    const pts = stroke.edges && stroke.edges[side];
+    if (stroke.turnAcc > 0.9 && sinceLast > hand.w * 3 && pts && pts.length > 6) {
+      stroke.turnAcc = 0; stroke.lastSliver = stroke.dist;
+      // walk back along that edge for the sliver's length, keeping points a few pixels apart
+      const want = (14 + rand() * 22) * S, chain = [pts[pts.length - 1]];
+      let got = 0;
+      for (let i = pts.length - 2; i >= 0 && got < want; i--) {
+        const q = chain[chain.length - 1], d = Math.hypot(pts[i].x - q.x, pts[i].y - q.y);
+        if (d >= 3 * S) { chain.push(pts[i]); got += d; }
       }
-      const outer = pmx * uy - pmy * ux > 0 ? -1 : 1;
-      while (n-- > 0) {
-        const sg = rand() < 0.75 ? outer : -outer, th = (0.9 + rand() * 0.9) * S;
-        const L = (8 + rand() * 22) * S * Math.min(1.5, 0.6 + turn), o = (sg > 0 ? ePos : eNeg) + sg * th * 0.7, t = rand();
-        const cx = a.x + dx * t + nx * o, cy = a.y + dy * t + ny * o;
-        // one uneven, slightly wobbly sliver along the edge, a little fuller at one end
-        const f = rand() < 0.5 ? 1 : -1, sx = cx - ux * L * 0.5 * f, sy = cy - uy * L * 0.5 * f;
-        beads.push(sx, sy, th * (0.7 + rand() * 0.3), th * (1 + rand() * 0.4), L, Math.atan2(ux * f, -uy * f), 0.12, rand() * 6.283);
+      if (chain.length >= 3) {
+        const th = (0.8 + rand() * 0.8) * S, seed = rand() * 6.283;
+        for (let i = 1; i < chain.length; i++) {
+          const a0 = chain[i - 1], b0 = chain[i], u0 = (i - 1) / (chain.length - 1), u1 = i / (chain.length - 1);
+          const t0 = th * Math.max(0.25, Math.sin(Math.PI * u0)), t1 = th * Math.max(0.25, Math.sin(Math.PI * u1));
+          beads.push(b0.x, b0.y, t1, t0, Math.hypot(a0.x - b0.x, a0.y - b0.y), Math.atan2(a0.x - b0.x, b0.y - a0.y), 0.06, seed);
+        }
       }
     }
   }
