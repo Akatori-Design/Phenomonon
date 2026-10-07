@@ -252,6 +252,7 @@ uniform float uRainOut;   // how much rain is falling outside, 0..1
 uniform float uWind;      // -1..1, slants the rain outside
 uniform vec2 uParallax;   // small shift of the view outside as the viewer's head moves
 uniform float uFlash;     // lightning, 0..1
+uniform float uWdpr;      // water-map texels per CSS pixel
 const float T = 0.068;
 
 float hash1(float n) { return fract(sin(n * 127.1) * 43758.5453); }
@@ -327,11 +328,10 @@ void main() {
   float soft = mix(fw, T * 0.9, film);
   float mask = smoothstep(T - soft, T + soft, field);
 
-  float hL = texture(uWater, uv - vec2(uTexel.x * 2.0, 0.0)).g;
-  float hR = texture(uWater, uv + vec2(uTexel.x * 2.0, 0.0)).g;
-  float hD = texture(uWater, uv - vec2(0.0, uTexel.y * 2.0)).g;
-  float hU = texture(uWater, uv + vec2(0.0, uTexel.y * 2.0)).g;
-  vec2 grad = vec2(hR - hL, hU - hD) * 8.0;
+  vec4 wL = texture(uWater, uv - vec2(uTexel.x * 2.0, 0.0)), wR = texture(uWater, uv + vec2(uTexel.x * 2.0, 0.0));
+  vec4 wD = texture(uWater, uv - vec2(0.0, uTexel.y * 2.0)), wU = texture(uWater, uv + vec2(0.0, uTexel.y * 2.0));
+  vec2 grad = vec2(wR.g - wL.g, wU.g - wD.g) * 8.0 * uWdpr;
+  float thickPx = w.g * 32.0;   // water depth here, in CSS pixels
   vec3 n = normalize(vec3(-grad * 0.65, 1.0));
 
   // Glass: fogged where nothing has run through it yet, clear in the trails.
@@ -341,8 +341,18 @@ void main() {
   vec3 bloom = max(hazy - 0.62, 0.0) * 0.6;   // bright lights glow
   float lum = dot(hazy, vec3(0.299, 0.587, 0.114));
   hazy = mix(hazy, vec3(lum), 0.25) * 0.8 + vec3(0.085, 0.09, 0.1);
-  vec3 glass = mix(sharp, hazy, fog);
-
+  // fog scatters light: bright lights spread a soft halo well beyond their bokeh
+  vec3 far = lit(textureLod(uBg, bgUv(uv), uLod + 2.2).rgb);
+  vec3 halo = max(far - 0.42, 0.0) * 0.7 * fog;
+  vec3 glass = mix(sharp, hazy, fog) + halo;
+  // around each drop: a wet halo where the film thins out, a faint contact line right at its edge,
+  // and the light it gathers falling as a soft glow just below it (a faint shade just above)
+  float fieldU = wU.r + wU.a, fieldD = wD.r + wD.a;
+  float near = smoothstep(T * 0.3, T * 0.95, field) * (1.0 - smoothstep(T * 0.95, T * 1.05, field));
+  glass = mix(glass, sharp, near * 0.35 * fog);
+  glass *= 1.0 - 0.18 * smoothstep(T * 0.7, T * 0.98, field) * (1.0 - smoothstep(T * 0.98, T * 1.02, field)) * (1.0 - film);
+  float below = clamp((fieldU - fieldD) / max(field, 1e-3), -1.0, 1.0);
+  glass += hazy * near * max(below, 0.0) * 0.25 - glass * near * max(-below, 0.0) * 0.08;
   // Drop: a tiny lens. Displacement grows toward the rim, so the view inside is flipped.
   // Optics: a sight line from the eye enters the water's curved surface (bending by Snell's law),
   // then leaves through the flat glass, where its sideways component grows by the index of water.
@@ -354,7 +364,8 @@ void main() {
   vec2 dev = outXY / sqrt(max(1.0 - dot(outXY, outXY), 0.04));
   vec2 off = -dev * uRefract * 2.4 * vec2(uAspect, 1.0);
   // water bends red a touch less than blue: the faintest color fringe toward the rim
-  vec3 view = vec3(bgAt(uv - off * 0.97, 0.35).r, bgAt(uv - off, 0.35).g, bgAt(uv - off * 1.03, 0.35).b);
+  float lodV = mix(1.8, 0.2, smoothstep(2.0, 10.0, thickPx));   // a tiny drop shows a softer miniature, a big one a crisp image
+  vec3 view = vec3(bgAt(uv - off * 0.97, lodV).r, bgAt(uv - off, lodV).g, bgAt(uv - off * 1.03, lodV).b);
   vec3 inside = mix(view * 1.15, hazy * 1.12, 0.3) + 0.03 + bloom * 0.5;   // clear water: lighter than the fogged glass
   inside += max(view - 0.6, 0.0) * 1.1;   // the street's lights glint through each drop in their own colors
   float slope = length(n.xy);
@@ -362,7 +373,12 @@ void main() {
   inside *= 1.0 - rim * mix(0.3 + 0.25 * max(n.y, 0.0), 0.2, stream) * (1.0 - 0.85 * film);   // the upper rim reads darkest
   float outline = (1.0 - smoothstep(T, T * 1.9, field)) * (1.0 - film);   // thin dark line where the surface turns away
   inside = mix(inside, inside * 0.28, outline * 0.8);
-  inside += hazy * smoothstep(0.25, 0.7, slope) * max(-n.y, 0.0) * 0.9 * (1.0 - film);
+  // the drop is a lens: it gathers the light from behind into a bright crescent low inside it
+  vec3 sky = lit(textureLod(uBg, bgUv(uv + vec2(0.0, 0.06)), uLod).rgb);
+  inside += sky * smoothstep(0.15, 0.6, slope) * pow(max(-n.y, 0.0), 1.5) * 1.1 * (1.0 - film);
+  // deeper water is a touch cooler and darker, but brightest where it focuses best, at its centre
+  float depth = smoothstep(2.0, 18.0, thickPx);
+  inside = inside * mix(vec3(1.0), vec3(0.93, 0.97, 1.0), depth) + 0.035 * depth * (1.0 - slope);
   vec3 L = normalize(vec3(-0.4, 0.75, 0.9));
   float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 90.0);
   inside += spec * 0.75 * vec3(1.0, 0.93, 0.82) * (1.0 - stream) * (1.0 - film);   // the room lamp's highlight
@@ -373,8 +389,12 @@ void main() {
   inside = mix(inside, roomEnv(reflect(vec3(0.0, 0.0, -1.0), nO)), clamp(fres * 1.6, 0.0, 0.85) * (1.0 - 0.7 * film));
   // streams catch the light across their flat crown: a soft, uneven sheen over roughly the middle half
   float crown = (1.0 - smoothstep(0.06, 0.5, slope)) * stream;
-  float vary = 0.7 + 0.3 * sin(uv.y * 37.0 + uv.x * 11.0) * sin(uv.y * 13.0 - uv.x * 7.0);
+  // moving water shimmers: ripples on its surface carry small highlights downstream
+  float flow = uv.y * 90.0 + uTime * 9.0, wav = sin(flow + uv.x * 23.0) * sin(flow * 0.47 - uv.x * 9.0 + 1.7);
+  float vary = 0.65 + 0.35 * wav;
   inside += (vec3(0.08) + hazy * 0.1) * crown * vary;
+  float glintS = pow(max(wav, 0.0), 12.0) * (stream * (1.0 - smoothstep(0.1, 0.6, slope)) + film * 0.6);
+  inside += vec3(0.5, 0.48, 0.44) * glintS * 0.35;
 
   glass += bloom;
   vec3 col = mix(glass, inside, mask);
@@ -387,7 +407,7 @@ void main() {
 const blob = program(BLOB_VS, BLOB_FS, blob_names);
 const copy = program(QUAD_VS, COPY_FS, ['uTex']);
 const fill = program(QUAD_VS, FILL_FS, ['uColor']);
-const fin = program(QUAD_VS, FINAL_FS, ['uWater', 'uMist', 'uBg', 'uTexel', 'uBgScale', 'uBgSize', 'uAspect', 'uRefract', 'uFog', 'uLod', 'uTime', 'uRainOut', 'uWind', 'uParallax', 'uFlash']);
+const fin = program(QUAD_VS, FINAL_FS, ['uWater', 'uMist', 'uBg', 'uTexel', 'uBgScale', 'uBgSize', 'uAspect', 'uRefract', 'uFog', 'uLod', 'uTime', 'uRainOut', 'uWind', 'uParallax', 'uFlash', 'uWdpr']);
 
 const quadBuf = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
@@ -673,9 +693,12 @@ function resize() {
   simW = Math.max(1, Math.round(innerWidth)); simH = Math.max(1, Math.round(innerHeight));
   S = Math.max(0.6, Math.min(1.4, Math.min(simW, simH) / 820));
   canvas.width = Math.round(simW * dpr); canvas.height = Math.round(simH * dpr);
-  if (!D || D.w !== simW || D.h !== simH) {
+  // the water is drawn at the screen's real pixel density, up to ~4.5 megapixels
+  const wd = Math.max(1, Math.min(dpr, Math.sqrt(4.5e6 / (simW * simH))));
+  const tw = Math.round(simW * wd), th = Math.round(simH * wd);
+  if (!D || D.w !== tw || D.h !== th) {
     if (D) { freeTarget(D); freeTarget(W); }
-    D = makeTarget(simW, simH); W = makeTarget(simW, simH);
+    D = makeTarget(tw, th); W = makeTarget(tw, th);
     clearTarget(D, [0, 0, 1, 0]);
   }
   for (const d of drops) if (d.x > simW + d.r || d.y > simH + d.r) d.dead = true;
@@ -1174,6 +1197,7 @@ function buildDropQuads() {
       dropQuads.push(d.x, d.y + d.r * 0.15 * bl, d.r * sp * (1 + 0.12 * bl), d.r * (0.82 - 0.12 * bl), d.r * (0.3 + 0.5 * st + 0.5 * bl), ang, 0.03, d.seed);
       const big = Math.min(1.5, Math.max(0, d.r / rSlide - 1));   // bigger drops drag a longer tail
       tails.push(d.x, d.y, d.r * sp * 0.95, d.r * 0.24, d.r * (1.2 + 2.2 * st) * (1 + 1.6 * big), ang, 0, 0);   // as wide as the drop where it starts, tapering into its wet track
+      if (d.vy > 4 * S) tails.push(d.x, d.y, d.r * 0.9, d.r * 0.8, Math.min(d.vy * 1.5, d.r * 4), ang, Math.min(0.6, d.vy / (25 * S)), 1);   // a fast drop smears along its path
     } else {
       // Small drops are domes held round by surface tension; as they grow, gravity wins more and
       // more (it scales with size squared), flattening the top and fattening the bottom.
@@ -2041,6 +2065,7 @@ function passFinal() {
   gl.uniform1f(u.uWind, weather.wind);
   gl.uniform2f(u.uParallax, parallax.x, parallax.y);
   gl.uniform1f(u.uFlash, weather.flash);
+  gl.uniform1f(u.uWdpr, W.w / simW);
   gl.bindVertexArray(vaoQuad); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
