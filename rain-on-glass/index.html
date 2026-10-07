@@ -1048,6 +1048,16 @@ function step(dt) {
       // proportionally faster. Without more water arriving from above it slows and comes to rest.
       const ds = Math.hypot(d.x - px, d.y - py);
       if (ds > 0) d.r = Math.cbrt(Math.max((0.5 * S) ** 3, d.r ** 3 - 0.09 * S * d.r * ds));
+      // Along its way the drop sheds tiny droplets at random: specks left where the film behind
+      // it breaks up, scattered across the width of its track.
+      d.dotAcc = (d.dotAcc || 0) + ds;
+      if (d.dotGap == null) d.dotGap = (4 + rand() * 16) * S;
+      while (d.dotAcc > d.dotGap) {
+        d.dotAcc -= d.dotGap; d.dotGap = (4 + rand() * 16) * S;
+        const t = rand(), side = (rand() - 0.5) * d.r * 1.3;
+        const rr = (0.45 + rand() * rand() * 1.1) * S * (0.8 + 0.3 * Math.min(2, d.r / rSlide));
+        bead(beads, px + (d.x - px) * t + side, py + (d.y - py) * t - d.r * (0.6 + rand() * 0.6), rr, 0.15);
+      }
       if (d.r < rSlide * 0.75 && d.vy < 0.4 * S && d.hold === 0 && d.flat < 0.05) { d.moving = false; reshape(d); }
       else if (d.r < rSlide * 0.75 && d.hold === 0) d.vy *= Math.pow(0.85, dt);   // too little water left to keep going
 
