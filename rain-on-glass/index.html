@@ -268,9 +268,10 @@ float rainOutside(vec2 uv, float soft) {
     if (h < 0.35 - 0.3 * uRainOut) continue;   // heavier rain, more streaks
     float y = fract(q.y * (0.8 + 0.3 * h) + uTime * speed * (0.7 + 0.6 * h) + h * 9.0);
     float len = 0.07 + 0.09 * h;
-    float along = smoothstep(0.0, len * 0.25, y) * (1.0 - smoothstep(len * 0.25, len, y));
-    float wdt = 0.03 + soft * 0.22;
-    float across = 1.0 - smoothstep(0.0, wdt, abs(fx - 0.5 - (h - 0.65) * 0.7));
+    // seen through fog the streak spreads into a soft smear: wider, with long faded ends
+    float along = smoothstep(0.0, len * (0.25 + soft * 0.5), y) * (1.0 - smoothstep(len * (0.25 - soft * 0.1), len * (1.0 + soft * 0.8), y));
+    float wdt = 0.03 + soft * 0.55;
+    float across = 1.0 - smoothstep(0.0, wdt, abs(fx - 0.5 - (h - 0.65) * 0.7 * (1.0 - soft * 0.6)));
     sum += along * across * (1.0 - fk * 0.15);
   }
   return sum * uRainOut;
@@ -296,7 +297,7 @@ vec3 bgBlur(vec2 uv, float lod) {
     acc += c * wt; wsum += wt;
   }
   vec3 c = acc / wsum;
-  return lit(c + (vec3(0.6, 0.65, 0.72) + c * 0.5) * rainOutside(uv, 1.0) * 0.14);   // softened by the fog on the glass
+  return lit(c + (vec3(0.6, 0.65, 0.72) + c * 0.5) * rainOutside(uv, 1.0) * 0.09);   // blurred and dimmed by the fog on the glass
 }
 // A faint reflection of the room behind the viewer on the glass: a warm lamp up to the left.
 vec3 roomReflection(vec2 uv) {
