@@ -1549,7 +1549,12 @@ function initAudio() {
     return { g, bp };
   };
   const trickle = loopNoise('bandpass', 2600, 1.4, master);
-  const swish = loopNoise('bandpass', 900, 0.7, master);
+  // Fingers rubbing wet glass: a light, airy hiss, fluttering with the stick-slip of skin on glass
+  const swish = loopNoise('bandpass', 3400, 0.9, master);
+  const flutter = ctx.createOscillator(), flutterDepth = ctx.createGain();
+  flutter.frequency.value = 25; flutterDepth.gain.value = 0;
+  flutter.connect(flutterDepth); flutterDepth.connect(swish.g.gain); flutter.start();
+  swish.flutter = flutter; swish.depth = flutterDepth;
   // thunder: a long, low rumble of brown noise with a rolling envelope
   const tlen = sr * 5, tbuf = ctx.createBuffer(1, tlen, sr), td = tbuf.getChannelData(0);
   let tb = 0, peak = 0;
@@ -1597,9 +1602,12 @@ function stepSound(dt) {
   // a soft swish while the fingers slide on the glass, with the odd squeak on clean, wiped glass
   const speed = stroke ? stroke.speedNow || 0 : 0;
   if (stroke) stroke.speedNow = speed * 0.5;
-  audio.swish.g.gain.setTargetAtTime(soundOn ? Math.min(0.09, speed * 0.003) : 0, t, 0.05);
-  audio.swish.bp.frequency.setTargetAtTime(700 + speed * 25, t, 0.05);
-  if (soundLive() && stroke && speed > 3 && speed < 30 && rand() < 0.006 * dt) squeak();
+  const rub = soundOn ? Math.min(0.03, speed * 0.0012) : 0;
+  audio.swish.g.gain.setTargetAtTime(rub, t, 0.04);
+  audio.swish.depth.gain.setTargetAtTime(rub * 0.6, t, 0.04);
+  audio.swish.flutter.frequency.setTargetAtTime(18 + speed * 1.5, t, 0.05);
+  audio.swish.bp.frequency.setTargetAtTime(3000 + speed * 40, t, 0.05);
+  if (soundLive() && stroke && speed > 3 && speed < 30 && rand() < 0.003 * dt) squeak();
   audio.wash.gain.setTargetAtTime(h * h * 0.22, t, 0.3);   // kept under the knocks
   audio.lpf.frequency.setTargetAtTime(400 + 1200 * h * h, t, 0.3);
   // rain striking the rest of the window, out of view
@@ -1609,7 +1617,7 @@ function squeak() {
   const { ctx, master } = audio, o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime;
   const f = 1100 + Math.random() * 700;
   o.type = 'triangle'; o.frequency.setValueAtTime(f, t); o.frequency.linearRampToValueAtTime(f * (1.1 + Math.random() * 0.2), t + 0.09);
-  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.025, t + 0.015); g.gain.exponentialRampToValueAtTime(0.0005, t + 0.12);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.01, t + 0.015); g.gain.exponentialRampToValueAtTime(0.0005, t + 0.12);
   o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.13);
 }
 // thunder some seconds after a flash: the further the lightning, the longer the wait and the softer the rumble
