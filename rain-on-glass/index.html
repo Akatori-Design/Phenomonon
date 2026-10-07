@@ -742,6 +742,9 @@ const radii = () => {
 // The most water a drop can hold on the glass: below this radius it stays put, however long it
 // sits; once it grows past it (by merging), gravity wins and it slides.
 const holdR = () => radii().maxR * 0.9;
+// The biggest a drop can look: water a drop takes in beyond this doesn't make it any bigger,
+// it is carried as extra weight (d.extra) that keeps it running fast, and enough of it opens a stream.
+const maxDropR = () => holdR() * 1.25;
 const bead = (b, x, y, r, wob = 0.08) => b.push(x, y, r, r, 0, 0, wob, rand() * 6.283);
 const eraseAt = (x, y, r) => erase.push(x, y, r, r, 0, 0, 0, 0);
 // Small leftover water (trail beads, splashes, what a wipe or a dried stream leaves) is made of
@@ -857,7 +860,9 @@ function merge(a, b) {
   const ma = a.r ** 3, mb = b.r ** 3, wasMoving = a.moving;
   a.x = (a.x * ma + b.x * mb) / (ma + mb);
   a.y = (a.y * ma + b.y * mb) / (ma + mb);
-  a.r = Math.cbrt(ma + mb);
+  const tot = ma + mb, cap = maxDropR() ** 3;
+  a.r = Math.cbrt(Math.min(tot, cap));
+  a.extra = (a.extra || 0) + (b.extra || 0) + Math.max(0, tot - cap);
   a.moving = a.moving || b.moving;
   a.vy = Math.max(a.vy, b.vy) * 0.9 + (a.moving ? 0.3 : 0);
   a.vx = (a.vx * ma + b.vx * mb) / (ma + mb);
@@ -979,7 +984,7 @@ function step(dt) {
       const x = rand() * simW, y = rand() * simH * 1.05 - simH * 0.05;
       // heavier rain falls in bigger drops: light rain is mostly fine drops, a downpour mostly large ones
       // heavier rain falls in bigger drops; from about 70% the biggest are already too heavy to hold and drip at once
-      const hv = SL.rain, r = minR + (maxR * (0.4 + 0.75 * hv) - minR) * Math.pow(rand(), 2.6 - 1.6 * hv);
+      const hv = SL.rain, r = Math.min(maxDropR(), minR + (maxR * (0.4 + 0.75 * hv) - minR) * Math.pow(rand(), 2.6 - 1.6 * hv));
       if (underHand(x, y, 0)) { lambda -= 1; continue; }
       // The heavier the rain, the harder each drop hits the glass. A hard hit bursts: it lands
       // spread wide and ragged, flings a ring of spray well out from the impact, and the jolt
@@ -1052,7 +1057,7 @@ function step(dt) {
       // snag less: a heavy drop streaks down, a small one wanders and stalls.
       // Each drop heads for its own running speed, which climbs steeply with size; heavy drops
       // get there almost at once and pour down, small ones creep up to a slow crawl.
-      const q = d.r / rSlide, heavy = Math.min(1, Math.max(0, (q - 1) / 0.8));
+      const q = Math.cbrt(d.r ** 3 + (d.extra || 0)) / rSlide, heavy = Math.min(1, Math.max(0, (q - 1) / 0.8));   // by weight, including water it carries beyond its size
       const onWet = Math.min(1, sampleGrid(wet, d.x, d.y + d.r));   // wet glass is an easier path: faster, fewer snags
       // running speed in proportion to the drop's volume: twice the water, twice as fast
       const target = Math.min(60 * S, 1.6 * S * q ** 3 * (0.85 + rand() * 0.3) * (1 + 0.5 * onWet));
@@ -1099,7 +1104,7 @@ function step(dt) {
       if (d.kick) { d.x += d.kick * dt; d.kick *= Math.pow(0.88, dt); if (Math.abs(d.kick) < 0.01) d.kick = 0; }
       d.x += d.vx * dt; d.y += d.vy * dt;
       markWet(d.x, d.y, d.r * 1.2);
-      if (d.r > rSlide * 1.05) {
+      if (Math.cbrt(d.r ** 3 + (d.extra || 0)) > rSlide * 1.05) {
         // a big drop leaves a watery trail on the glass behind it that thins and evaporates
         if (!d.wet) d.wet = [];
         const last = d.wet[d.wet.length - 1];
@@ -1140,7 +1145,11 @@ function step(dt) {
       // A running drop wets the glass behind it and loses water the further it goes, small ones
       // proportionally faster. Without more water arriving from above it slows and comes to rest.
       const ds = Math.hypot(d.x - px, d.y - py);
-      if (ds > 0) d.r = Math.cbrt(Math.max((0.5 * S) ** 3, d.r ** 3 - 0.09 * S * d.r * ds));
+      if (ds > 0) {
+        let loss = 0.09 * S * d.r * ds;
+        if (d.extra > 0) { const take = Math.min(d.extra, loss); d.extra -= take; loss -= take; }   // sheds its extra weight first
+        if (loss > 0) d.r = Math.cbrt(Math.max((0.5 * S) ** 3, d.r ** 3 - loss));
+      }
       // Along its way the drop sheds tiny droplets at random: specks left where the film behind
       // it breaks up, scattered across the width of its track.
       d.dotAcc = (d.dotAcc || 0) + ds;
@@ -1159,17 +1168,17 @@ function step(dt) {
       for (let s = 1; s <= steps; s++) { const t = s / steps; eraseAt(px + (d.x - px) * t, py + (d.y - py) * t, d.r * 0.92); }
       if (d.y + d.r > simH - sillThick(d.x) && d.y < simH + d.r) { addToSill(d.x, d.r ** 3); d.dead = true; }   // reaches the water along the bottom edge
       else if (d.y - d.r * 2 > simH || d.x < -d.r * 2 || d.x > simW + d.r * 2) d.dead = true;
-      else if (d.r > maxR * 2 && d.vy > 2 * S && rivulets.length < 30) {   // only a really big gathering of water opens a channel
+      else if ((d.extra || 0) > maxDropR() ** 3 * 1.5 && d.vy > 2 * S && rivulets.length < 30) {   // only a really big gathering of water opens a channel
         // Enough water in one running drop to keep a channel open: it becomes a stream from here,
         // running until its own water is spent unless more arrives to feed it.
-        const vol = (d.r / maxR) ** 3;
+        const vol = (d.r ** 3 + d.extra) / maxR ** 3;
         rivulets.push(newRivulet(d.x, d.y - d.r, { w: Math.min(6 * S, d.r * 0.4), flow: 1, stopAt: d.y + simH * Math.min(1.2, 0.12 * vol) * (0.7 + rand() * 0.6) }));
         d.dead = true;
       }
     }
     if (d.dead) continue;
     if (d.wet) {
-      const life = 60 + 90 * Math.min(1.5, Math.max(0, d.r / rSlide - 1));
+      const life = 60 + 90 * Math.min(1.5, Math.max(0, Math.cbrt(d.r ** 3 + (d.extra || 0)) / rSlide - 1));
       for (const p of d.wet) {
         p.age += dt;
         // stretched thin, the trail can't stay a film: it pinches off into a line of little beads
@@ -1218,7 +1227,7 @@ function buildDropQuads() {
       const ang = -Math.atan2(d.vx, Math.max(0.3, d.vy)) * 0.8;
       const bl = d.bulge || 0;   // caught: water piles up at the front edge
       dropQuads.push(d.x, d.y + d.r * 0.15 * bl, d.r * sp * (1 + 0.12 * bl), d.r * (0.82 - 0.12 * bl), d.r * (0.3 + 0.5 * st + 0.5 * bl), ang, 0.03 + 0.05 * Math.min(1, Math.max(0, d.r / rSlide - 1)), d.seed);
-      const big = Math.min(1.5, Math.max(0, d.r / rSlide - 1));   // bigger drops drag a longer tail
+      const big = Math.min(1.5, Math.max(0, Math.cbrt(d.r ** 3 + (d.extra || 0)) / rSlide - 1));   // heavier drops drag a longer tail
       tails.push(d.x, d.y, d.r * sp * 0.95, d.r * 0.24, d.r * (1.2 + 2.2 * st) * (1 + 1.6 * big), ang, 0, 0);   // as wide as the drop where it starts, tapering into its wet track
       if (d.vy > 4 * S) tails.push(d.x, d.y, d.r * 0.9, d.r * 0.8, Math.min(d.vy * 1.5, d.r * 4), ang, Math.min(0.6, d.vy / (25 * S)), 1);   // a fast drop smears along its path
     } else {
@@ -1947,8 +1956,8 @@ function sweep(a, b, a0, a1) {
           rv.burst = 1;
           rivulets.push(rv);
         } else {
-          const dd = addDrop(bx, by, r0, { stick: 1 });
-          if (dd) { dd.moving = true; dd.vy = Math.max(dd.vy, 1.5 * S); dd.trailY = dd.y; dd.gap = dd.r * 2; }
+          const dd = addDrop(bx, by, Math.min(r0, maxDropR()), { stick: 1 });
+          if (dd) { dd.extra = (dd.extra || 0) + Math.max(0, r0 ** 3 - dd.r ** 3); dd.moving = true; dd.vy = Math.max(dd.vy, 1.5 * S); dd.trailY = dd.y; dd.gap = dd.r * 2; }
         }
         stroke.water *= 0.1;
       }
