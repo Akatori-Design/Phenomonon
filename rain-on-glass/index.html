@@ -261,17 +261,17 @@ float rainOutside(vec2 uv, float soft) {
   q.x += q.y * uWind * 0.3;
   float sum = 0.0;
   for (int k = 0; k < 4; k++) {
-    // nearest layer first: bigger, faster, softer streaks; farther layers finer, slower and fainter
-    float fk = float(k), scale = 22.0 * (1.0 + fk * 1.1), speed = 1.9 - fk * 0.35;
+    // far off behind the window: many fine, thin streaks; the nearer layers a touch longer and faster
+    float fk = float(k), scale = 70.0 * (1.0 + fk * 0.9), speed = 1.6 - fk * 0.25;
     float c = floor(q.x * scale), fx = fract(q.x * scale);
     float h = hash1(c + fk * 31.7);
-    if (h < 0.55 - 0.4 * uRainOut) continue;   // heavier rain, more streaks
+    if (h < 0.35 - 0.3 * uRainOut) continue;   // heavier rain, more streaks
     float y = fract(q.y * (0.8 + 0.3 * h) + uTime * speed * (0.7 + 0.6 * h) + h * 9.0);
-    float len = 0.14 + 0.16 * h;
+    float len = 0.07 + 0.09 * h;
     float along = smoothstep(0.0, len * 0.25, y) * (1.0 - smoothstep(len * 0.25, len, y));
-    float wdt = 0.05 + fk * 0.015 + soft * 0.3 + (3.0 - fk) * 0.02;
-    float across = 1.0 - smoothstep(0.0, wdt, abs(fx - 0.5 - (h - 0.75) * 0.6));
-    sum += along * across * (1.0 - fk * 0.18);
+    float wdt = 0.03 + soft * 0.22;
+    float across = 1.0 - smoothstep(0.0, wdt, abs(fx - 0.5 - (h - 0.65) * 0.7));
+    sum += along * across * (1.0 - fk * 0.15);
   }
   return sum * uRainOut;
 }
@@ -279,7 +279,7 @@ vec2 bgUv(vec2 uv) { return (uv - 0.5 + uParallax) * uBgScale + 0.5; }
 vec3 lit(vec3 c) { return c * (1.0 + uFlash * 1.8) + uFlash * vec3(0.12, 0.13, 0.16); }
 vec3 bgAt(vec2 uv, float lod) {
   vec3 c = textureLod(uBg, bgUv(uv), lod).rgb;
-  return lit(c + (vec3(0.62, 0.67, 0.74) + c * 0.6) * rainOutside(uv, 0.0) * 0.42);   // streaks catch the light behind them
+  return lit(c + (vec3(0.62, 0.67, 0.74) + c * 0.6) * rainOutside(uv, 0.0) * 0.22);   // streaks catch the light behind them
 }
 // Out-of-focus view: a disc of samples (a camera's bokeh) in which bright lights count for more,
 // so they open into soft round discs instead of smudges.
@@ -296,7 +296,7 @@ vec3 bgBlur(vec2 uv, float lod) {
     acc += c * wt; wsum += wt;
   }
   vec3 c = acc / wsum;
-  return lit(c + (vec3(0.6, 0.65, 0.72) + c * 0.5) * rainOutside(uv, 1.0) * 0.3);
+  return lit(c + (vec3(0.6, 0.65, 0.72) + c * 0.5) * rainOutside(uv, 1.0) * 0.14);   // softened by the fog on the glass
 }
 // A faint reflection of the room behind the viewer on the glass: a warm lamp up to the left.
 vec3 roomReflection(vec2 uv) {
