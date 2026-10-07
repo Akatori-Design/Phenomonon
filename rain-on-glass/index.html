@@ -258,26 +258,28 @@ float hash1(float n) { return fract(sin(n * 127.1) * 43758.5453); }
 // streaks moving down. 'soft' widens them for the fogged, blurred view.
 float rainOutside(vec2 uv, float soft) {
   vec2 q = vec2(uv.x / uAspect, uv.y);
-  q.x += q.y * uWind * 0.25;
+  q.x += q.y * uWind * 0.3;
   float sum = 0.0;
-  for (int k = 0; k < 3; k++) {
-    float fk = float(k), scale = 40.0 * (1.0 + fk * 1.2), speed = 1.4 - fk * 0.35;
+  for (int k = 0; k < 4; k++) {
+    // nearest layer first: bigger, faster, softer streaks; farther layers finer, slower and fainter
+    float fk = float(k), scale = 22.0 * (1.0 + fk * 1.1), speed = 1.9 - fk * 0.35;
     float c = floor(q.x * scale), fx = fract(q.x * scale);
     float h = hash1(c + fk * 31.7);
-    if (h < 0.45) continue;
-    float y = fract(q.y * (0.9 + 0.3 * h) + uTime * speed * (0.7 + 0.6 * h) + h * 9.0);
-    float len = 0.08 + 0.1 * h;
-    float along = smoothstep(0.0, len * 0.3, y) * (1.0 - smoothstep(len * 0.3, len, y));
-    float wdt = 0.06 + soft * 0.25;
-    float across = 1.0 - smoothstep(0.0, wdt, abs(fx - 0.5 - (h - 0.7) * 0.5));
-    sum += along * across * (0.6 - fk * 0.15);
+    if (h < 0.55 - 0.4 * uRainOut) continue;   // heavier rain, more streaks
+    float y = fract(q.y * (0.8 + 0.3 * h) + uTime * speed * (0.7 + 0.6 * h) + h * 9.0);
+    float len = 0.14 + 0.16 * h;
+    float along = smoothstep(0.0, len * 0.25, y) * (1.0 - smoothstep(len * 0.25, len, y));
+    float wdt = 0.05 + fk * 0.015 + soft * 0.3 + (3.0 - fk) * 0.02;
+    float across = 1.0 - smoothstep(0.0, wdt, abs(fx - 0.5 - (h - 0.75) * 0.6));
+    sum += along * across * (1.0 - fk * 0.18);
   }
   return sum * uRainOut;
 }
 vec2 bgUv(vec2 uv) { return (uv - 0.5 + uParallax) * uBgScale + 0.5; }
 vec3 lit(vec3 c) { return c * (1.0 + uFlash * 1.8) + uFlash * vec3(0.12, 0.13, 0.16); }
 vec3 bgAt(vec2 uv, float lod) {
-  return lit(textureLod(uBg, bgUv(uv), lod).rgb + vec3(0.55, 0.6, 0.66) * rainOutside(uv, 0.0) * 0.16);
+  vec3 c = textureLod(uBg, bgUv(uv), lod).rgb;
+  return lit(c + (vec3(0.62, 0.67, 0.74) + c * 0.6) * rainOutside(uv, 0.0) * 0.42);   // streaks catch the light behind them
 }
 // Out-of-focus view: a disc of samples (a camera's bokeh) in which bright lights count for more,
 // so they open into soft round discs instead of smudges.
@@ -293,7 +295,8 @@ vec3 bgBlur(vec2 uv, float lod) {
     float wt = (1.0 + 6.0 * pow(max(lum - 0.55, 0.0), 2.0)) * (0.85 + 0.3 * rr);
     acc += c * wt; wsum += wt;
   }
-  return lit(acc / wsum + vec3(0.5, 0.55, 0.6) * rainOutside(uv, 1.0) * 0.07);
+  vec3 c = acc / wsum;
+  return lit(c + (vec3(0.6, 0.65, 0.72) + c * 0.5) * rainOutside(uv, 1.0) * 0.3);
 }
 // A faint reflection of the room behind the viewer on the glass: a warm lamp up to the left.
 vec3 roomReflection(vec2 uv) {
@@ -1987,7 +1990,7 @@ function passFinal() {
   gl.uniform1f(u.uFog, P.fog);
   gl.uniform1f(u.uLod, 4.5 + P.fog * 3.0);
   gl.uniform1f(u.uTime, weather.t / 60);
-  gl.uniform1f(u.uRainOut, Math.min(1, SL.rain ** 1.5 * weather.gust));
+  gl.uniform1f(u.uRainOut, Math.min(1, (0.15 + 0.85 * SL.rain) ** 1.3 * weather.gust));
   gl.uniform1f(u.uWind, weather.wind);
   gl.uniform2f(u.uParallax, parallax.x, parallax.y);
   gl.uniform1f(u.uFlash, weather.flash);
