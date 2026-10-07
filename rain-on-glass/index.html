@@ -2004,6 +2004,17 @@ function sweep(a, b, a0, a1) {
 function release() {
   if (!stroke) return;
   const { minR, maxR } = radii(), rSlide = holdR();
+  // Lifting the fingers often leaves a little water from under each fingertip: up to three small,
+  // irregular drops where the pads were. Not every time, and not always from every finger.
+  if (lastPt && rand() < 0.7) {
+    const c = Math.cos(handA), s = Math.sin(handA);
+    for (const f of hand.fingers) {
+      if (rand() > 0.6) continue;
+      const lx = f.x + (rand() - 0.5) * hand.w * 0.3, ly = f.tip + hand.w * (0.05 + rand() * 0.2);
+      const d = addDrop(lastPt.x + c * lx - s * ly, lastPt.y + s * lx + c * ly, Math.max(minR * 1.5, rSlide * (0.35 + rand() * 0.3)), { stick: 2 });   // big enough not to just evaporate
+      if (d && !d.moving) { d.wob = 0.18 + rand() * 0.14; d.tilt = (rand() - 0.5) * 0.8; d.sag = rand(); }   // smeared off the skin: lopsided and ragged
+    }
+  }
   const band = stroke.water > 0 ? puddle() : [];
   const vol = band.map((p, i) => (i ? p.t * p.t * Math.hypot(p.x - band[i - 1].x, p.y - band[i - 1].y) : 0));
   const total = vol.reduce((x, y) => x + y, 0);
