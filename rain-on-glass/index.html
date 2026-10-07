@@ -1271,9 +1271,9 @@ function buildDropQuads() {
       streams.push(b.x, b.y, rb, ra, Math.hypot(a.x - b.x, a.y - b.y), Math.atan2(a.x - b.x, b.y - a.y), 0, caps);
       // the edges catch on the glass here and there, each side on its own: small irregular bumps
       const hb = ((Math.sin(j * 12.9898 + rv.phase * 78.233) * 43758.5453) % 1 + 1) % 1;
-      if (hb < 0.22) {
-        const sl = Math.hypot(a.x - b.x, a.y - b.y) || 1, side = hb < 0.11 ? 1 : -1;
-        const px = -(a.y - b.y) / sl * side, py = (a.x - b.x) / sl * side, br = rb * (0.35 + hb * 2);
+      if (hb < 0.07) {
+        const sl = Math.hypot(a.x - b.x, a.y - b.y) || 1, side = hb < 0.035 ? 1 : -1;
+        const px = -(a.y - b.y) / sl * side, py = (a.x - b.x) / sl * side, br = rb * (0.3 + hb * 3);
         streams.push(b.x + px * rb * 0.6, b.y + py * rb * 0.6, br, br * 0.8, 3 * S, Math.atan2(a.x - b.x, b.y - a.y), 0, 3);
       }
     }
@@ -1321,14 +1321,12 @@ function spawnRivulet() {
   rivulets.push(newRivulet(rand() * simW, -6, { stopAt }));
 }
 const streamWidth = (rv) => rv.w * (0.35 + 0.65 * Math.min(1, rv.flow));
-// Channel width along its length: smooth, irregular, fixed once the water has carved it.
-// Water in a streak gathers into bulges and beads with thin necks between them: mostly narrow,
-// swelling now and then to twice its usual width.
+// Channel width along its length: nearly even, the way the pinned edges of a rivulet hold it,
+// with slow irregular variation. It swells where the path kinks and bends (see evolveChannel),
+// not in a row of beads.
 function channelWidth(rv, y) {
   const [a, b, c] = rv.ph;
-  const slow = 1 + 0.2 * Math.sin(y * 0.017 + a);
-  const v = 0.5 + 0.5 * Math.sin(y * 0.09 + b) * Math.sin(y * 0.031 + c);
-  return slow * (0.5 + 1.6 * v * v * v);
+  return 0.95 + 0.13 * Math.sin(y * 0.011 + a) + 0.08 * Math.sin(y * 0.037 + b) * Math.sin(y * 0.023 + c);
 }
 function addSurge(rv, y, extra = 0) {
   rv.surges.push({
@@ -1447,6 +1445,51 @@ function mergeTouchingStreams() {
 }
 
 let wetAcc = 0;
+// River physics on the glass. Water swinging round a bend presses on the outer bank; where that
+// beats the grip of the glass the edge gives way, so bends and kinks grow outward and the channel
+// widens there, while the inside bank is left behind. Gravity pulls straight down: a stretch that
+// leans past ~30° sags back toward vertical, and the water slows and pools wider along it.
+// Elsewhere the pinned edges hold the path where it is, apart from viscosity rounding off the
+// sharpest corners. Everything scales with how much water is flowing.
+function evolveChannel(rv, n, dt) {
+  const pts = rv.pts, fl = Math.min(1.2, rv.flow), wd = streamWidth(rv), t = Math.min(2, dt);
+  const W = Math.max(5, Math.min(12, Math.round(wd * 1.6)));   // a bend spans a few widths; finer kinks keep the shape they were carved with
+  if (n < 4 * W) return;
+  // the path smoothed over a bend's length, and how far each stretch of it bulges off its chord
+  const cs = new Float64Array(n + 1), box = (arr, j) => { const lo = Math.max(0, j - W), hi = Math.min(n - 1, j + W); return (arr[hi + 1] - arr[lo]) / (hi - lo + 1); };
+  for (let j = 0; j < n; j++) cs[j + 1] = cs[j] + pts[j].x;
+  const xs = new Float32Array(n), dev = new Float32Array(n), ps = new Float64Array(n + 1);
+  for (let j = 0; j < n; j++) xs[j] = box(cs, j);
+  for (let j = W; j < n - W; j++) dev[j] = xs[j] - (xs[j - W] + xs[j + W]) / 2;
+  // the outer bank gives way once the water's push beats the grip of the glass; the whole bend moves out together
+  for (let j = 0; j < n; j++) ps[j + 1] = ps[j] + Math.sign(dev[j]) * Math.max(0, Math.abs(dev[j]) - wd * 0.35);
+  const room = rv.w;   // how far a bend can wander from where it was carved
+  const shift = new Float32Array(n);
+  for (let j = 1; j < n - 1; j++) {
+    const a = pts[j - 1], b = pts[j], c = pts[j + 1];
+    if (!a.on || !b.on || !c.on) continue;
+    let g = box(ps, j) * 0.003 * fl * t;
+    const off = b.x - (b.x0 ?? b.x);
+    if (g * off > 0) g *= Math.max(0, 1 - Math.abs(off) / room);
+    shift[j] = g;
+    // viscosity rounds the sharpest corners; gravity keeps easing a stretch that leans too far back down
+    const tx = c.x - a.x, tilt = Math.abs(tx) / (Math.hypot(tx, c.y - a.y) || 1), sag = Math.max(0, tilt - 0.5) / 0.5;
+    const lap = (a.x + c.x) / 2 - b.x, ex = Math.abs(lap) - wd * 0.35 * (1 - sag);
+    if (ex > 0) shift[j] += Math.sign(lap) * ex * (0.06 + 0.1 * sag * fl) * t;
+    // wider round the outside of bends and where the water runs across the slope; the inside of
+    // bends and straight runs slowly fill back in toward the channel's own width
+    const bend = Math.min(1, Math.abs(dev[j]) / (wd * 1.2)), kt = (b.k0 || 1) * (1 + 0.5 * bend + 0.5 * sag);
+    b.k += (kt - b.k) * (kt > b.k ? 0.004 * fl : 0.0015) * t;
+  }
+  for (let j = 1; j < n - 1; j++) pts[j].x += shift[j];
+  // the moving water keeps its path clear and wet
+  rv.erodeAcc = (rv.erodeAcc || 0) + dt;
+  if (rv.erodeAcc > 20) {
+    rv.erodeAcc = 0;
+    for (let j = 0; j < n; j += 3) if (pts[j].on) { eraseAt(pts[j].x, pts[j].y, rv.w * 2.6); markWet(pts[j].x, pts[j].y, rv.w * 3); }
+  }
+}
+
 function stepRivulets(dt) {
   clock += dt;
   mergeAcc += dt;
@@ -1521,17 +1564,23 @@ function stepRivulets(dt) {
             const q = pointAt(o, y);
             if (q && q.on && Math.abs(q.x - rv.x) < nd) { nd = Math.abs(q.x - rv.x); near = { o, q }; }
           }
-          // mostly straight runs; now and then the front snags and the stream jogs sideways
-          if (rv.jog > 0) rv.jog -= 1;
-          else if (rand() < 0.03) { rv.jog = 2 + (rand() * 5 | 0); rv.vx += (rand() < 0.5 ? -1 : 1) * (0.7 + rand() * 0.8) * S; }
+          // Stick-slip: the front runs down, snags on the glass and steps sideways in a short kink
+          // before it breaks free and runs on, so the path is crooked rather than wavy.
+          let step = 0;
+          if (rv.jog > 0) { rv.jog -= 1; step = rv.jogDx; }
+          else if (rand() < 0.028 + 0.045 * dirtAt(rv.x, y)) {
+            const m = 2 + (rand() * 3 | 0), D = (rand() < 0.5 ? -1 : 1) * wd * (0.35 + rand() * rand() * 2);
+            rv.jog = m - 1; rv.jogDx = step = D / m; rv.kink = Math.min(1, Math.abs(D) / (wd * 2));
+          }
           rv.vx += (rand() - 0.5) * 0.05 * S;
+          rv.vx += (Math.sin(y * 0.013 + rv.ph[0]) * 0.4 * S - rv.vx) * 0.1;   // a slow, gentle sway
           if (near && nd < wd * 8) rv.vx += Math.sign(near.q.x - rv.x) * 0.12 * S;
           rv.vx += wetPull(rv.x, y + 6 * S, wd + 6 * S) * 0.3 * S;
           rv.vx -= (dirtAt(rv.x + 8 * S, y + 6 * S) - dirtAt(rv.x - 8 * S, y + 6 * S)) * 0.8 * S;   // steering round grimy patches
           rv.vx += weather.wind * 0.06 * S;
-          rv.vx *= rv.jog > 0 ? 0.97 : 0.8;
-          rv.vx = Math.max(-1.6, Math.min(1.6, rv.vx));
-          let x = rv.x + rv.vx;
+          rv.vx *= 0.8;
+          rv.vx = Math.max(-1.2, Math.min(1.2, rv.vx));
+          let x = rv.x + rv.vx + step;
           if (handNow) {
             if (!rv.side && underHand(x, y, wd)) {
               // water meeting the fingers first gathers above them, then spills around one side
@@ -1541,7 +1590,12 @@ function stepRivulets(dt) {
             x = aroundHand(rv, x, y, wd);
           } else { rv.side = 0; rv.blockT = null; }
           rv.x = x;
-          pts.push({ x: rv.x, y, k: channelWidth(rv, y), on: true });
+          {
+            let k0 = channelWidth(rv, y);
+            if (step) k0 *= 1.12;                                                        // water slows across the kink
+            else if (rv.kink > 0.05) { k0 *= 1 + 0.4 * rv.kink; rv.kink *= 0.55; }      // and gathers in the corner below it
+            pts.push({ x: rv.x, y, k: k0, k0, x0: rv.x, on: true });
+          }
           eraseAt(rv.x, y, rv.w * 3.2);   // the water clears a wider path than it covers
           if (rand() < 0.12) bead(beads, rv.x + (rand() < 0.5 ? -1 : 1) * rv.w * (1.6 + rand() * 2), y + (rand() - 0.5) * 4, (0.4 + rand() * 0.9) * S, 0.12);
           markWet(rv.x, y, rv.w * 3);
@@ -1594,10 +1648,16 @@ function stepRivulets(dt) {
       }
     }
 
+    // the channel reshapes itself while water runs through it
+    if (!rv.orphan && rv.flow > 0.1) evolveChannel(rv, f >= 0 ? f : pts.length, dt);
     // surges of water travel down the connected part of the channel
     const reachY = f >= 0 ? (f > 0 ? rv.pts[f - 1].y : rv.y0) : lastY;
     if (!rv.orphan && heavy > 0 && rand() < 0.012 * dt * (0.5 + heavy)) { addSurge(rv, rv.y0); rv.flow = Math.min(1.1, rv.flow + 0.3); }   // fed from above only in heavy rain
-    for (const sg of rv.surges) sg.y += sg.speed * dt;
+    for (const sg of rv.surges) {
+      const q = pointAt(rv, sg.y), q2 = q && pointAt(rv, sg.y + 6);
+      const steep = q && q2 ? 6 / Math.max(6, Math.hypot(q2.x - q.x, 6)) : 1;   // gravity speeds it down steep stretches
+      sg.y += sg.speed * dt * (0.4 + 0.6 * steep);
+    }
     rv.surges = rv.surges.filter((sg) => {
       if (sg.y - sg.len * 0.5 < Math.min(reachY, simH + 10)) return true;
       if (rv.pool) rv.pool.t += 25;   // a surge reaching the wiped edge feeds the film
