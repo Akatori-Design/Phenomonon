@@ -1555,6 +1555,17 @@ function initAudio() {
   flutter.frequency.value = 25; flutterDepth.gain.value = 0;
   flutter.connect(flutterDepth); flutterDepth.connect(swish.g.gain); flutter.start();
   swish.flutter = flutter; swish.depth = flutterDepth;
+  // The grip: skin sticks and slips on wet glass, a rapid run of tiny squeaks. A buzzy tone gated
+  // on and off by a chatter rhythm that speeds up with the wipe.
+  const grip = ctx.createOscillator(), gripBp = ctx.createBiquadFilter(), gripGain = ctx.createGain();
+  grip.type = 'sawtooth'; grip.frequency.value = 600;
+  gripBp.type = 'bandpass'; gripBp.frequency.value = 1100; gripBp.Q.value = 3.5;
+  gripGain.gain.value = 0;
+  const chatter = ctx.createOscillator(), chatterDepth = ctx.createGain();
+  chatter.type = 'square'; chatter.frequency.value = 14; chatterDepth.gain.value = 0;
+  chatter.connect(chatterDepth); chatterDepth.connect(gripGain.gain);
+  grip.connect(gripBp); gripBp.connect(gripGain); gripGain.connect(master); grip.start(); chatter.start();
+  swish.grip = { osc: grip, bp: gripBp, gain: gripGain, chatter, depth: chatterDepth };
   // thunder: a long, low rumble of brown noise with a rolling envelope
   const tlen = sr * 5, tbuf = ctx.createBuffer(1, tlen, sr), td = tbuf.getChannelData(0);
   let tb = 0, peak = 0;
@@ -1603,8 +1614,14 @@ function stepSound(dt) {
   const speed = stroke ? stroke.speedNow || 0 : 0;
   if (stroke) stroke.speedNow = speed * 0.5;
   const rub = soundOn ? Math.min(0.03, speed * 0.0012) : 0;
-  audio.swish.g.gain.setTargetAtTime(rub, t, 0.04);
-  audio.swish.depth.gain.setTargetAtTime(rub * 0.6, t, 0.04);
+  audio.swish.g.gain.setTargetAtTime(rub * 0.25, t, 0.04);          // only a trace of wet hiss
+  audio.swish.depth.gain.setTargetAtTime(rub * 0.15, t, 0.04);
+  const gr = audio.swish.grip, lvl = soundOn ? Math.min(0.022, speed * 0.0011) : 0;
+  gr.gain.gain.setTargetAtTime(lvl * 0.5, t, 0.03);                  // gated 0..lvl by the chatter
+  gr.depth.gain.setTargetAtTime(lvl * 0.5, t, 0.03);
+  gr.chatter.frequency.setTargetAtTime(9 + speed * 1.3 + Math.random() * 4, t, 0.05);
+  gr.osc.frequency.setTargetAtTime(480 + speed * 12 + Math.random() * 60, t, 0.03);
+  gr.bp.frequency.setTargetAtTime(950 + speed * 20, t, 0.05);
   audio.swish.flutter.frequency.setTargetAtTime(18 + speed * 1.5, t, 0.05);
   audio.swish.bp.frequency.setTargetAtTime(3000 + speed * 40, t, 0.05);
   if (soundLive() && stroke && speed > 3 && speed < 30 && rand() < 0.003 * dt) squeak();
